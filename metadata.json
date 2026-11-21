@@ -1,0 +1,8 @@
+{
+  "name": "Materia Medica Clinic",
+  "description": "Admin-only homeopathic patient management system with constitutional case-taking, remedy logs, free-tier photo upload server, and clinic capacity scaling.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

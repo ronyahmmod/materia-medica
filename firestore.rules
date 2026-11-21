@@ -1,0 +1,420 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net (Default Deny)
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Helpers
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isPrimaryAdmin() {
+      return isVerifiedUser() && request.auth.token.email == 'rony.jib@gmail.com';
+    }
+
+    function isAdmin() {
+      return isPrimaryAdmin()
+        || (isVerifiedUser() && exists(/databases/$(database)/documents/admins/$(request.auth.uid)));
+    }
+
+    function isOptionalString(data, key, maxLen) {
+      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
+    }
+
+    // Validation Blueprint: Patient
+    function isValidPatient(data) {
+      return data.keys().hasAll([
+          'caseNumber', 'fullName', 'age', 'gender', 'phone',
+          'chiefComplaint', 'status', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'caseNumber', 'fullName', 'age', 'gender', 'phone',
+          'email', 'address', 'chiefComplaint', 'thermalState',
+          'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
+          'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.caseNumber is string && data.caseNumber.size() >= 1 && data.caseNumber.size() <= 32 && data.caseNumber.matches('^[a-zA-Z0-9_\\-]+$')
+        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
+        && data.age is number && data.age >= 0 && data.age <= 130
+        && data.gender is string && data.gender in ['Female', 'Male', 'Other']
+        && data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 32
+        && isOptionalString(data, 'email', 160)
+        && isOptionalString(data, 'address', 300)
+        && data.chiefComplaint is string && data.chiefComplaint.size() >= 1 && data.chiefComplaint.size() <= 500
+        && (!('thermalState' in data) || (data.thermalState is string && data.thermalState in ['Chilly', 'Hot', 'Ambithermal', 'Unspecified']))
+        && isOptionalString(data, 'constitutionNotes', 2000)
+        && isOptionalString(data, 'allergies', 500)
+        && isOptionalString(data, 'portraitUrl', 300)
+        && isOptionalString(data, 'portraitPhotoId', 128)
+        && data.status is string && data.status in ['active', 'follow-up', 'archived']
+        && isOptionalString(data, 'lastVisitDate', 32)
+        && isOptionalString(data, 'nextFollowUpDate', 32)
+        && isOptionalString(data, 'lastRemedy', 160)
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: Consultation
+    function isValidConsultation(data, patientId) {
+      return data.keys().hasAll([
+          'patientId', 'visitDate', 'presentingSymptoms',
+          'remedyName', 'potency', 'dosage',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'patientId', 'visitDate', 'presentingSymptoms',
+          'mentalGenerals', 'physicalGenerals', 'modalitiesWorse', 'modalitiesBetter',
+          'remedyName', 'potency', 'dosage', 'clinicalNotes', 'nextFollowUpDate',
+          'photoIds', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.patientId is string && data.patientId == patientId
+        && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 32
+        && data.presentingSymptoms is string && data.presentingSymptoms.size() >= 1 && data.presentingSymptoms.size() <= 2000
+        && isOptionalString(data, 'mentalGenerals', 1500)
+        && isOptionalString(data, 'physicalGenerals', 1500)
+        && isOptionalString(data, 'modalitiesWorse', 500)
+        && isOptionalString(data, 'modalitiesBetter', 500)
+        && data.remedyName is string && data.remedyName.size() >= 1 && data.remedyName.size() <= 160
+        && data.potency is string && data.potency.size() >= 1 && data.potency.size() <= 32
+        && data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 200
+        && isOptionalString(data, 'clinicalNotes', 2000)
+        && isOptionalString(data, 'nextFollowUpDate', 32)
+        && (!('photoIds' in data) || (
+          data.photoIds is list
+          && data.photoIds.size() <= 10
+          && (data.photoIds.size() == 0 || data.photoIds[0] is string)
+        ))
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: PatientPhoto
+    function isValidPatientPhoto(data, patientId) {
+      return data.keys().hasAll([
+          'patientId', 'fileName', 'url', 'mimeType', 'sizeBytes',
+          'category', 'uploadedBy', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'patientId', 'fileName', 'url', 'mimeType', 'sizeBytes',
+          'category', 'caption', 'consultationId', 'uploadedBy', 'createdAt'
+        ])
+        && data.patientId is string && data.patientId == patientId
+        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
+        && data.url is string && data.url.size() >= 1 && data.url.size() <= 300
+        && data.mimeType is string && data.mimeType in ['image/webp', 'image/jpeg', 'image/png']
+        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 2097152
+        && data.category is string && data.category in ['portrait', 'symptom', 'tongue', 'skin', 'prescription']
+        && isOptionalString(data, 'caption', 300)
+        && isOptionalString(data, 'consultationId', 128)
+        && data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 128
+        && data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: ClinicSettings
+    function isValidClinicSettings(data) {
+      return data.keys().hasAll([
+          'clinicName', 'practitionerName', 'planTier',
+          'patientLimit', 'storageLimitMb', 'updatedBy', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'clinicName', 'practitionerName', 'planTier',
+          'patientLimit', 'storageLimitMb', 'hostingProvider',
+          'notes', 'updatedBy', 'updatedAt'
+        ])
+        && data.clinicName is string && data.clinicName.size() >= 1 && data.clinicName.size() <= 160
+        && data.practitionerName is string && data.practitionerName.size() >= 1 && data.practitionerName.size() <= 120
+        && data.planTier is string && data.planTier in ['free', 'growth', 'clinic_pro']
+        && data.patientLimit is number && data.patientLimit > 0 && data.patientLimit <= 100000
+        && data.storageLimitMb is number && data.storageLimitMb > 0 && data.storageLimitMb <= 100000
+        && isOptionalString(data, 'hostingProvider', 120)
+        && isOptionalString(data, 'notes', 500)
+        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: AdminUser
+    function isValidAdminUser(data) {
+      return data.keys().hasAll(['email', 'name', 'role', 'createdAt'])
+        && data.keys().hasOnly(['email', 'name', 'role', 'createdAt'])
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
+        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
+        && data.role is string && data.role in ['owner', 'practitioner']
+        && data.createdAt is timestamp;
+    }
+
+    // Validation Blueprint: RepertoryEntry
+    function isValidRepertoryEntry(data) {
+      return data.keys().hasAll([
+          'chapter', 'rubric', 'primaryRemedy', 'remedies',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'chapter', 'rubric', 'primaryRemedy', 'remedies',
+          'modalities', 'symptomNotes', 'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.chapter is string
+        && data.chapter in [
+          'Mind', 'Head & Vertigo', 'Respiratory', 'Gastrointestinal',
+          'Skin', 'Musculoskeletal', 'Sleep & Dreams', 'Generalities'
+        ]
+        && data.rubric is string && data.rubric.size() >= 1 && data.rubric.size() <= 240
+        && data.primaryRemedy is string && data.primaryRemedy.size() >= 1 && data.primaryRemedy.size() <= 160
+        && data.remedies is list
+        && data.remedies.size() >= 1
+        && data.remedies.size() <= 20
+        && data.remedies[0] is string
+        && isOptionalString(data, 'modalities', 500)
+        && isOptionalString(data, 'symptomNotes', 1500)
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: ClinicalNote
+    function isValidClinicalNote(data, patientId) {
+      return data.keys().hasAll([
+          'patientId', 'observedDate', 'focusArea', 'content',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'patientId', 'observedDate', 'focusArea', 'content',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.patientId is string && data.patientId == patientId
+        && data.observedDate is string && data.observedDate.size() >= 4 && data.observedDate.size() <= 32
+        && data.focusArea is string
+        && data.focusArea in ['Constitution', 'Mental State', 'Miasm & History', 'General Observation']
+        && data.content is string && data.content.size() >= 1 && data.content.size() <= 4000
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Patients Collection
+    match /patients/{patientId} {
+      allow list: if isVerifiedUser()
+        && (isPrimaryAdmin() || resource.data.createdBy == request.auth.uid);
+
+      allow get: if isValidId(patientId) && isAdmin();
+
+      allow create: if isValidId(patientId)
+        && isAdmin()
+        && isValidPatient(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(patientId)
+        && isAdmin()
+        && isValidPatient(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (incoming().diff(existing()).affectedKeys().hasOnly([
+            'caseNumber', 'fullName', 'age', 'gender', 'phone',
+            'email', 'address', 'chiefComplaint', 'thermalState',
+            'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
+            'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy', 'updatedAt'
+          ]))
+          || (incoming().diff(existing()).affectedKeys().hasOnly([
+            'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy', 'updatedAt'
+          ]))
+          || (incoming().diff(existing()).affectedKeys().hasOnly([
+            'portraitUrl', 'portraitPhotoId', 'updatedAt'
+          ]))
+        );
+
+      allow delete: if isValidId(patientId) && isAdmin();
+
+      // Consultations Subcollection
+      match /consultations/{consultationId} {
+        allow list: if isVerifiedUser()
+          && (isPrimaryAdmin() || resource.data.createdBy == request.auth.uid);
+
+        allow get: if isValidId(patientId) && isValidId(consultationId) && isAdmin();
+
+        allow create: if isValidId(patientId)
+          && isValidId(consultationId)
+          && isAdmin()
+          && isValidConsultation(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(patientId)
+          && isValidId(consultationId)
+          && isAdmin()
+          && isValidConsultation(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'visitDate', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
+            'modalitiesWorse', 'modalitiesBetter', 'remedyName', 'potency',
+            'dosage', 'clinicalNotes', 'nextFollowUpDate', 'photoIds', 'updatedAt'
+          ]);
+
+        allow delete: if isValidId(patientId) && isValidId(consultationId) && isAdmin();
+      }
+
+      // Clinical Photos Subcollection
+      match /photos/{photoId} {
+        allow list: if isVerifiedUser()
+          && (isPrimaryAdmin() || resource.data.uploadedBy == request.auth.uid);
+
+        allow get: if isValidId(patientId) && isValidId(photoId) && isAdmin();
+
+        allow create: if isValidId(patientId)
+          && isValidId(photoId)
+          && isAdmin()
+          && isValidPatientPhoto(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().uploadedBy == request.auth.uid
+          && incoming().createdAt == request.time;
+
+        allow update: if isValidId(patientId)
+          && isValidId(photoId)
+          && isAdmin()
+          && isValidPatientPhoto(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().uploadedBy == existing().uploadedBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'category', 'consultationId']);
+
+        allow delete: if isValidId(patientId) && isValidId(photoId) && isAdmin();
+      }
+
+      // Clinical Notes Subcollection
+      match /clinical_notes/{noteId} {
+        allow list: if isVerifiedUser()
+          && (isPrimaryAdmin() || resource.data.createdBy == request.auth.uid);
+
+        allow get: if isValidId(patientId) && isValidId(noteId) && isAdmin();
+
+        allow create: if isValidId(patientId)
+          && isValidId(noteId)
+          && isAdmin()
+          && isValidClinicalNote(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(patientId)
+          && isValidId(noteId)
+          && isAdmin()
+          && isValidClinicalNote(incoming(), patientId)
+          && exists(/databases/$(database)/documents/patients/$(patientId))
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && incoming().diff(existing()).affectedKeys().hasOnly([
+            'observedDate', 'focusArea', 'content', 'updatedAt'
+          ]);
+
+        allow delete: if isValidId(patientId) && isValidId(noteId) && isAdmin();
+      }
+    }
+
+    // Clinic Settings & Free-Tier / Subscription Quota Config
+    match /clinic_settings/{settingId} {
+      allow list: if isVerifiedUser()
+        && (isPrimaryAdmin() || resource.data.updatedBy == request.auth.uid);
+
+      allow get: if isValidId(settingId) && isAdmin();
+
+      allow create: if isValidId(settingId)
+        && isAdmin()
+        && isValidClinicSettings(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(settingId)
+        && isAdmin()
+        && isValidClinicSettings(incoming())
+        && incoming().updatedBy == request.auth.uid
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'clinicName', 'practitionerName', 'planTier',
+          'patientLimit', 'storageLimitMb', 'hostingProvider',
+          'notes', 'updatedBy', 'updatedAt'
+        ]);
+
+      allow delete: if isValidId(settingId) && isPrimaryAdmin();
+    }
+
+    // Authorized Clinic Admins Registry (Primary Admin Managed)
+    match /admins/{adminId} {
+      allow list: if isPrimaryAdmin();
+      allow get: if isValidId(adminId) && (isPrimaryAdmin() || (isVerifiedUser() && request.auth.uid == adminId));
+
+      allow create: if isValidId(adminId)
+        && isPrimaryAdmin()
+        && isValidAdminUser(incoming())
+        && incoming().createdAt == request.time;
+
+      allow update: if isValidId(adminId)
+        && isPrimaryAdmin()
+        && isValidAdminUser(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'name', 'role']);
+
+      allow delete: if isValidId(adminId) && isPrimaryAdmin();
+    }
+
+    // Repertory Clinical Reference Collection
+    match /repertory_entries/{entryId} {
+      allow list: if isVerifiedUser()
+        && (isPrimaryAdmin() || resource.data.createdBy == request.auth.uid);
+
+      allow get: if isValidId(entryId) && isAdmin();
+
+      allow create: if isValidId(entryId)
+        && isAdmin()
+        && isValidRepertoryEntry(incoming())
+        && incoming().createdBy == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if isValidId(entryId)
+        && isAdmin()
+        && isValidRepertoryEntry(incoming())
+        && incoming().createdBy == existing().createdBy
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'chapter', 'rubric', 'primaryRemedy', 'remedies',
+          'modalities', 'symptomNotes', 'updatedAt'
+        ]);
+
+      allow delete: if isValidId(entryId) && isAdmin();
+    }
+  }
+}

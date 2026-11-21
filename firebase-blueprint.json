@@ -1,0 +1,497 @@
+{
+  "entities": {
+    "Patient": {
+      "title": "Patient",
+      "description": "Homeopathic patient clinical record managed exclusively by clinic admin.",
+      "type": "object",
+      "properties": {
+        "caseNumber": {
+          "type": "string",
+          "description": "Unique clinic case identifier",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fullName": {
+          "type": "string",
+          "description": "Patient full name",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "age": {
+          "type": "number",
+          "description": "Patient age in years"
+        },
+        "gender": {
+          "type": "string",
+          "enum": ["Female", "Male", "Other"]
+        },
+        "phone": {
+          "type": "string",
+          "description": "Primary contact phone number",
+          "minLength": 3,
+          "maxLength": 32
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "chiefComplaint": {
+          "type": "string",
+          "description": "Primary presenting homeopathic complaint",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "thermalState": {
+          "type": "string",
+          "enum": ["Chilly", "Hot", "Ambithermal", "Unspecified"]
+        },
+        "constitutionNotes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "allergies": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "portraitUrl": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "portraitPhotoId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "follow-up", "archived"]
+        },
+        "lastVisitDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "nextFollowUpDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "lastRemedy": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "caseNumber",
+        "fullName",
+        "age",
+        "gender",
+        "phone",
+        "chiefComplaint",
+        "status",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Consultation": {
+      "title": "Consultation",
+      "description": "Homeopathic case-taking, constitutional evaluation, and remedy prescription log.",
+      "type": "object",
+      "properties": {
+        "patientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "visitDate": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "presentingSymptoms": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "mentalGenerals": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "physicalGenerals": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "modalitiesWorse": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "modalitiesBetter": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "remedyName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "potency": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "dosage": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "clinicalNotes": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "nextFollowUpDate": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "photoIds": {
+          "type": "array",
+          "description": "Bounded list of attached clinical photo IDs (max 10)"
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "patientId",
+        "visitDate",
+        "presentingSymptoms",
+        "remedyName",
+        "potency",
+        "dosage",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "PatientPhoto": {
+      "title": "PatientPhoto",
+      "description": "Metadata for clinical and patient photos stored on the free-tier upload server.",
+      "type": "object",
+      "properties": {
+        "patientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fileName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "mimeType": {
+          "type": "string",
+          "enum": ["image/webp", "image/jpeg", "image/png"]
+        },
+        "sizeBytes": {
+          "type": "number"
+        },
+        "category": {
+          "type": "string",
+          "enum": ["portrait", "symptom", "tongue", "skin", "prescription"]
+        },
+        "caption": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "consultationId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "uploadedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "patientId",
+        "fileName",
+        "url",
+        "mimeType",
+        "sizeBytes",
+        "category",
+        "uploadedBy",
+        "createdAt"
+      ]
+    },
+    "ClinicSettings": {
+      "title": "ClinicSettings",
+      "description": "Clinic profile, free-tier quota limits, and subscription plan selection.",
+      "type": "object",
+      "properties": {
+        "clinicName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "practitionerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "planTier": {
+          "type": "string",
+          "enum": ["free", "growth", "clinic_pro"]
+        },
+        "patientLimit": {
+          "type": "number"
+        },
+        "storageLimitMb": {
+          "type": "number"
+        },
+        "hostingProvider": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "clinicName",
+        "practitionerName",
+        "planTier",
+        "patientLimit",
+        "storageLimitMb",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Authorized practitioner admin accounts permitted to access patient records.",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "practitioner"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "name", "role", "createdAt"]
+    },
+    "RepertoryEntry": {
+      "title": "RepertoryEntry",
+      "description": "Common homeopathic symptom rubric and associated remedies stored by clinic admin for quick clinical reference.",
+      "type": "object",
+      "properties": {
+        "chapter": {
+          "type": "string",
+          "enum": [
+            "Mind",
+            "Head & Vertigo",
+            "Respiratory",
+            "Gastrointestinal",
+            "Skin",
+            "Musculoskeletal",
+            "Sleep & Dreams",
+            "Generalities"
+          ]
+        },
+        "rubric": {
+          "type": "string",
+          "description": "Symptom rubric or keynote presentation",
+          "minLength": 1,
+          "maxLength": 240
+        },
+        "primaryRemedy": {
+          "type": "string",
+          "description": "Highest-grade primary remedy for this rubric",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "remedies": {
+          "type": "array",
+          "description": "Bounded list of associated remedies (1 to 20 entries)"
+        },
+        "modalities": {
+          "type": "string",
+          "description": "Aggravations and ameliorations (< / >)",
+          "maxLength": 500
+        },
+        "symptomNotes": {
+          "type": "string",
+          "description": "Clinical keynotes and differentiation pearls",
+          "maxLength": 1500
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "chapter",
+        "rubric",
+        "primaryRemedy",
+        "remedies",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ClinicalNote": {
+      "title": "ClinicalNote",
+      "description": "Dated, unstructured clinical observations about the patient's constitution and mental state.",
+      "type": "object",
+      "properties": {
+        "patientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "observedDate": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "focusArea": {
+          "type": "string",
+          "enum": [
+            "Constitution",
+            "Mental State",
+            "Miasm & History",
+            "General Observation"
+          ]
+        },
+        "content": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "patientId",
+        "observedDate",
+        "focusArea",
+        "content",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/patients/{patientId}": {
+      "schema": { "$ref": "#/entities/Patient" },
+      "description": "Admin-managed homeopathic patient profiles."
+    },
+    "/patients/{patientId}/consultations/{consultationId}": {
+      "schema": { "$ref": "#/entities/Consultation" },
+      "description": "Chronological homeopathic consultations and prescriptions for a patient."
+    },
+    "/patients/{patientId}/photos/{photoId}": {
+      "schema": { "$ref": "#/entities/PatientPhoto" },
+      "description": "Clinical and portrait photo metadata linked to the free-tier photo server."
+    },
+    "/patients/{patientId}/clinical_notes/{noteId}": {
+      "schema": { "$ref": "#/entities/ClinicalNote" },
+      "description": "Dated unstructured observations on patient constitution and mental state."
+    },
+    "/repertory_entries/{entryId}": {
+      "schema": { "$ref": "#/entities/RepertoryEntry" },
+      "description": "Admin-curated homeopathic repertory rubrics and remedy references."
+    },
+    "/clinic_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/ClinicSettings" },
+      "description": "Clinic practice settings and free-tier vs subscription quota configuration."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Authorized clinic admin registry."
+    }
+  }
+}

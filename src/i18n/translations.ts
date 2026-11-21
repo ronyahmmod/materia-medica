@@ -1,0 +1,175 @@
+import type {
+  ClinicalNoteFocus,
+  GenderOption,
+  PatientStatus,
+  PhotoCategory,
+  PlanTier,
+  RepertoryChapter,
+  ThermalState,
+} from '../types/clinic';
+
+export type AppLanguage = 'en' | 'bn';
+
+export const STATUS_LABELS_I18N: Record<AppLanguage, Record<PatientStatus, string>> = {
+  en: {
+    active: 'Active',
+    'follow-up': 'Follow-up Due',
+    archived: 'Archived',
+  },
+  bn: {
+    active: 'সক্রিয়',
+    'follow-up': 'ফলো-আপ বাকি',
+    archived: 'আর্কাইভড',
+  },
+};
+
+export const GENDER_LABELS_I18N: Record<AppLanguage, Record<GenderOption, string>> = {
+  en: {
+    Female: 'Female',
+    Male: 'Male',
+    Other: 'Other',
+  },
+  bn: {
+    Female: 'মহিলা',
+    Male: 'পুরুষ',
+    Other: 'অন্যান্য',
+  },
+};
+
+export const THERMAL_LABELS_I18N: Record<AppLanguage, Record<ThermalState, string>> = {
+  en: {
+    Unspecified: 'Unspecified',
+    Chilly: 'Chilly',
+    Hot: 'Hot',
+    Ambithermal: 'Ambithermal',
+  },
+  bn: {
+    Unspecified: 'অনির্ধারিত',
+    Chilly: 'শীতকাতর (Chilly)',
+    Hot: 'গ্রীষ্মকাতর (Hot)',
+    Ambithermal: 'উভয়তাপীয়',
+  },
+};
+
+export const PHOTO_CATEGORY_LABELS_I18N: Record<AppLanguage, Record<PhotoCategory, string>> = {
+  en: {
+    portrait: 'Patient Portrait',
+    symptom: 'Symptom / Lesion',
+    tongue: 'Tongue / Nail',
+    skin: 'Skin',
+    prescription: 'Prescription / Lab',
+  },
+  bn: {
+    portrait: 'রোগীর ছবি',
+    symptom: 'লক্ষণ / ক্ষত',
+    tongue: 'জিহ্বা / নখ',
+    skin: 'ত্বক / চর্মরোগ',
+    prescription: 'প্রেসক্রিপশন / রিপোর্ট',
+  },
+};
+
+export const REPERTORY_CHAPTER_LABELS_I18N: Record<AppLanguage, Record<RepertoryChapter, string>> = {
+  en: {
+    Mind: 'Mind',
+    'Head & Vertigo': 'Head & Vertigo',
+    Respiratory: 'Respiratory',
+    Gastrointestinal: 'Gastrointestinal',
+    Skin: 'Skin',
+    Musculoskeletal: 'Musculoskeletal',
+    'Sleep & Dreams': 'Sleep & Dreams',
+    Generalities: 'Generalities',
+  },
+  bn: {
+    Mind: 'মন (Mind)',
+    'Head & Vertigo': 'মাথা ও ঘূর্ণিরোগ',
+    Respiratory: 'শ্বাসতন্ত্র',
+    Gastrointestinal: 'পরিপাকতন্ত্র',
+    Skin: 'ত্বক',
+    Musculoskeletal: 'অস্থি ও পেশি',
+    'Sleep & Dreams': 'ঘুম ও স্বপ্ন',
+    Generalities: 'সার্বদৈহিক (Generalities)',
+  },
+};
+
+export const NOTE_FOCUS_LABELS_I18N: Record<AppLanguage, Record<ClinicalNoteFocus, string>> = {
+  en: {
+    Constitution: 'Constitution',
+    'Mental State': 'Mental State',
+    'Miasm & History': 'Miasm & History',
+    'General Observation': 'General Observation',
+  },
+  bn: {
+    Constitution: 'ধাতু ও প্রকৃতি (Constitution)',
+    'Mental State': 'মানসিক অবস্থা',
+    'Miasm & History': 'মায়াজম ও পূর্ব-ইতিহাস',
+    'General Observation': 'সাধারণ পর্যবেক্ষণ',
+  },
+};
+
+export const PLAN_LABELS_I18N: Record<
+  AppLanguage,
+  Record<
+    PlanTier,
+    {
+      name: string;
+      audience: string;
+      monthlyPriceLabel: string;
+      databaseTier: string;
+      photoStorageTier: string;
+      backupPolicy: string;
+    }
+  >
+> = {
+  en: {
+    free: {
+      name: 'Starter Free Tier',
+      audience: 'For solo homeopaths starting out',
+      monthlyPriceLabel: '$0 / month',
+      databaseTier: 'Firestore Spark (Free Daily Quota)',
+      photoStorageTier: 'Compressed Local Express Storage (100 MB)',
+      backupPolicy: 'Manual JSON Case Export',
+    },
+    growth: {
+      name: 'Growth Practice',
+      audience: 'For busy single-doctor clinics',
+      monthlyPriceLabel: '$19 / month',
+      databaseTier: 'Firestore Blaze Pay-As-You-Go',
+      photoStorageTier: 'Managed Object Bucket (5 GB)',
+      backupPolicy: 'Daily Encrypted Cloud Snapshot',
+    },
+    clinic_pro: {
+      name: 'Clinic Pro',
+      audience: 'For multi-practitioner practices',
+      monthlyPriceLabel: '$49 / month',
+      databaseTier: 'Dedicated High-Throughput Firestore',
+      photoStorageTier: 'Managed CDN & Object Bucket (50 GB)',
+      backupPolicy: 'Hourly Point-in-Time Recovery',
+    },
+  },
+  bn: {
+    free: {
+      name: 'স্টার্টার ফ্রি টিয়ার',
+      audience: 'একক হোমিওপ্যাথিক চিকিৎসকের শুরুর জন্য',
+      monthlyPriceLabel: '$০ / মাস',
+      databaseTier: 'ফায়ারস্টোর স্পার্ক (ফ্রি দৈনিক কোটা)',
+      photoStorageTier: 'কম্প্রেসড লোকাল এক্সপ্রেস স্টোরেজ (১০০ MB)',
+      backupPolicy: 'ম্যানুয়াল JSON কেস এক্সপোর্ট',
+    },
+    growth: {
+      name: 'গ্রোথ প্র্যাকটিস',
+      audience: 'ব্যস্ত একক-ডাক্তার চেম্বারের জন্য',
+      monthlyPriceLabel: '$১৯ / মাস',
+      databaseTier: 'ফায়ারস্টোর ব্লেজ পে-অ্যাজ-ইউ-গো',
+      photoStorageTier: 'ম্যানেজড অবজেক্ট বাকেট (৫ GB)',
+      backupPolicy: 'দৈনিক এনক্রিপ্টেড ক্লাউড স্ন্যাপশট',
+    },
+    clinic_pro: {
+      name: 'ক্লিনিক প্রো',
+      audience: 'একাধিক চিকিৎসকের ক্লিনিকের জন্য',
+      monthlyPriceLabel: '$৪৯ / মাস',
+      databaseTier: 'ডেডিকেটেড হাই-থ্রুপুট ফায়ারস্টোর',
+      photoStorageTier: 'ম্যানেজড CDN ও অবজেক্ট বাকেট (৫০ GB)',
+      backupPolicy: 'ঘণ্টায় ঘণ্টায় পয়েন্ট-ইন-টাইম রিকভারি',
+    },
+  },
+};
