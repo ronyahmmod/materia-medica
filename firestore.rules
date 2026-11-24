@@ -73,6 +73,29 @@ service cloud.firestore {
       return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
     }
 
+    function isValidSoftDeleteFields(data) {
+      return (!('isDeleted' in data) || data.isDeleted is bool)
+        && isOptionalString(data, 'deletedAt', 40)
+        && isOptionalString(data, 'deletedBy', 128)
+        && isOptionalString(data, 'restoredAt', 40);
+    }
+
+    function isNotCreatingDeleted(data) {
+      return !('isDeleted' in data) || data.isDeleted == false;
+    }
+
+    // Clients may remain active or perform soft-delete; only Super Admin can un-delete (restore)
+    function isClientSoftDeleteStateValid(inc, ex) {
+      return (
+        ((!('isDeleted' in ex) || ex.isDeleted == false) && (!('isDeleted' in inc) || inc.isDeleted == false))
+        || (
+          inc.isDeleted == true
+          && 'deletedBy' in inc && inc.deletedBy == request.auth.uid
+          && 'deletedAt' in inc && inc.deletedAt is string && inc.deletedAt.size() >= 8 && inc.deletedAt.size() <= 40
+        )
+      );
+    }
+
     function isValidEmailList(listVal) {
       return listVal is list
         && listVal.size() >= 1
@@ -173,7 +196,7 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
-    // Validation Blueprint: Patient (supports both tenant & legacy root paths)
+    // Validation Blueprint: Patient (supports Human & Veterinary + Soft Delete)
     function isValidPatientBase(data, requireTenantFields) {
       return data.keys().hasAll([
           'caseNumber', 'fullName', 'age', 'gender', 'phone',
@@ -181,16 +204,21 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
+          'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
           'caseNumber', 'fullName', 'age', 'gender', 'phone',
           'email', 'address', 'chiefComplaint', 'thermalState',
           'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
           'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
         && isOptionalString(data, 'clinicId', 128)
         && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
         && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
+        && (!('patientType' in data) || (data.patientType is string && data.patientType in ['Human', 'Cow', 'Goat', 'Other Animal']))
+        && isOptionalString(data, 'animalSpeciesOrBreed', 120)
+        && isOptionalString(data, 'ownerOrGuardianName', 120)
         && data.caseNumber is string && data.caseNumber.size() >= 1 && data.caseNumber.size() <= 32 && data.caseNumber.matches('^[a-zA-Z0-9_\\-]+$')
         && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
         && data.age is number && data.age >= 0 && data.age <= 130
@@ -208,12 +236,13 @@ service cloud.firestore {
         && isOptionalString(data, 'lastVisitDate', 32)
         && isOptionalString(data, 'nextFollowUpDate', 32)
         && isOptionalString(data, 'lastRemedy', 160)
+        && isValidSoftDeleteFields(data)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
 
-    // Validation Blueprint: Consultation
+    // Validation Blueprint: Consultation (supports Morning/Afternoon remedies & Soft Delete)
     function isValidConsultationBase(data, patientId, requireTenantFields) {
       return data.keys().hasAll([
           'patientId', 'visitDate', 'presentingSymptoms',
@@ -222,10 +251,14 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientId', 'visitDate', 'presentingSymptoms',
+          'patientId', 'visitDate', 'diseaseName', 'presentingSymptoms',
           'mentalGenerals', 'physicalGenerals', 'modalitiesWorse', 'modalitiesBetter',
+          'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
+          'secondRemedyAfternoon', 'secondRemedyCompanion', 'secondRemedyPotency',
+          'globulesDose', 'ounceAmount', 'phialCount', 'extraPotency', 'biochemicMedicine',
           'remedyName', 'potency', 'dosage', 'clinicalNotes', 'nextFollowUpDate',
-          'photoIds', 'createdBy', 'createdAt', 'updatedAt'
+          'photoIds', 'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
+          'createdBy', 'createdAt', 'updatedAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
         && isOptionalString(data, 'clinicId', 128)
@@ -233,11 +266,23 @@ service cloud.firestore {
         && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
         && data.patientId is string && data.patientId == patientId
         && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 32
+        && isOptionalString(data, 'diseaseName', 160)
         && data.presentingSymptoms is string && data.presentingSymptoms.size() >= 1 && data.presentingSymptoms.size() <= 2000
         && isOptionalString(data, 'mentalGenerals', 1500)
         && isOptionalString(data, 'physicalGenerals', 1500)
         && isOptionalString(data, 'modalitiesWorse', 500)
         && isOptionalString(data, 'modalitiesBetter', 500)
+        && isOptionalString(data, 'firstRemedyMorning', 160)
+        && isOptionalString(data, 'firstRemedyCompanion', 160)
+        && isOptionalString(data, 'firstRemedyPotency', 32)
+        && isOptionalString(data, 'secondRemedyAfternoon', 160)
+        && isOptionalString(data, 'secondRemedyCompanion', 160)
+        && isOptionalString(data, 'secondRemedyPotency', 32)
+        && isOptionalString(data, 'globulesDose', 40)
+        && isOptionalString(data, 'ounceAmount', 40)
+        && isOptionalString(data, 'phialCount', 40)
+        && isOptionalString(data, 'extraPotency', 32)
+        && isOptionalString(data, 'biochemicMedicine', 160)
         && data.remedyName is string && data.remedyName.size() >= 1 && data.remedyName.size() <= 160
         && data.potency is string && data.potency.size() >= 1 && data.potency.size() <= 32
         && data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 200
@@ -248,6 +293,7 @@ service cloud.firestore {
           && data.photoIds.size() <= 10
           && (data.photoIds.size() == 0 || data.photoIds[0] is string)
         ))
+        && isValidSoftDeleteFields(data)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -262,7 +308,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
           'patientId', 'fileName', 'url', 'mimeType', 'sizeBytes',
-          'category', 'caption', 'consultationId', 'uploadedBy', 'createdAt'
+          'category', 'caption', 'consultationId',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
+          'uploadedBy', 'createdAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
         && isOptionalString(data, 'clinicId', 128)
@@ -276,6 +324,7 @@ service cloud.firestore {
         && data.category is string && data.category in ['portrait', 'symptom', 'tongue', 'skin', 'prescription']
         && isOptionalString(data, 'caption', 300)
         && isOptionalString(data, 'consultationId', 128)
+        && isValidSoftDeleteFields(data)
         && data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 128
         && data.createdAt is timestamp;
     }
@@ -289,6 +338,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
           'patientId', 'observedDate', 'focusArea', 'content',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
@@ -300,6 +350,7 @@ service cloud.firestore {
         && data.focusArea is string
         && data.focusArea in ['Constitution', 'Mental State', 'Miasm & History', 'General Observation']
         && data.content is string && data.content.size() >= 1 && data.content.size() <= 4000
+        && isValidSoftDeleteFields(data)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -314,7 +365,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
           'chapter', 'rubric', 'primaryRemedy', 'remedies',
-          'modalities', 'symptomNotes', 'createdBy', 'createdAt', 'updatedAt'
+          'modalities', 'symptomNotes',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
+          'createdBy', 'createdAt', 'updatedAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
         && isOptionalString(data, 'clinicId', 128)
@@ -333,6 +386,61 @@ service cloud.firestore {
         && data.remedies[0] is string
         && isOptionalString(data, 'modalities', 500)
         && isOptionalString(data, 'symptomNotes', 1500)
+        && isValidSoftDeleteFields(data)
+        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Validation Blueprint: DiseaseRemedyEntry
+    function isValidDiseaseRemedyEntryBase(data, requireTenantFields) {
+      return data.keys().hasAll([
+          'patientScope', 'diseaseName', 'symptoms',
+          'firstRemedyMorning', 'firstRemedyPotency',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
+          'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
+          'firstRemedyMorning', 'firstRemedyPotency',
+          'secondRemedyAfternoon', 'secondRemedyPotency',
+          'dosageInstructions', 'clinicalNotes',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
+          'createdBy', 'createdAt', 'updatedAt'
+        ])
+        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
+        && isOptionalString(data, 'clinicId', 128)
+        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
+        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
+        && data.patientScope is string && data.patientScope in ['All', 'Human', 'Veterinary']
+        && data.diseaseName is string && data.diseaseName.size() >= 1 && data.diseaseName.size() <= 160
+        && data.symptoms is string && data.symptoms.size() >= 1 && data.symptoms.size() <= 2000
+        && (!('symptomRules' in data) || (
+          data.symptomRules is list
+          && data.symptomRules.size() <= 50
+          && (
+            data.symptomRules.size() == 0
+            || (
+              data.symptomRules[0] is map
+              && data.symptomRules[0].keys().hasAll(['id', 'symptom', 'remedyName', 'potency', 'timing'])
+              && data.symptomRules[0].keys().hasOnly(['id', 'symptom', 'remedyName', 'potency', 'doseOrUnit', 'timing', 'notes'])
+              && data.symptomRules[0].id is string && data.symptomRules[0].id.size() >= 1 && data.symptomRules[0].id.size() <= 64
+              && data.symptomRules[0].symptom is string && data.symptomRules[0].symptom.size() >= 1 && data.symptomRules[0].symptom.size() <= 500
+              && data.symptomRules[0].remedyName is string && data.symptomRules[0].remedyName.size() >= 1 && data.symptomRules[0].remedyName.size() <= 160
+              && data.symptomRules[0].potency is string && data.symptomRules[0].potency.size() >= 1 && data.symptomRules[0].potency.size() <= 32
+              && isOptionalString(data.symptomRules[0], 'doseOrUnit', 64)
+              && data.symptomRules[0].timing is string && data.symptomRules[0].timing in ['general', 'morning', 'afternoon', 'companion-morning', 'companion-afternoon', 'biochemic']
+              && isOptionalString(data.symptomRules[0], 'notes', 300)
+            )
+          )
+        ))
+        && data.firstRemedyMorning is string && data.firstRemedyMorning.size() >= 1 && data.firstRemedyMorning.size() <= 160
+        && data.firstRemedyPotency is string && data.firstRemedyPotency.size() >= 1 && data.firstRemedyPotency.size() <= 32
+        && isOptionalString(data, 'secondRemedyAfternoon', 160)
+        && isOptionalString(data, 'secondRemedyPotency', 32)
+        && isOptionalString(data, 'dosageInstructions', 200)
+        && isOptionalString(data, 'clinicalNotes', 1500)
+        && isValidSoftDeleteFields(data)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -350,6 +458,7 @@ service cloud.firestore {
           'patientId', 'patientName', 'caseNumber', 'consultationId',
           'collectedDate', 'feeType', 'feeAmount', 'discountAmount',
           'netAmount', 'cashPaid', 'dueAmount', 'notes',
+          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
@@ -373,6 +482,7 @@ service cloud.firestore {
         && data.dueAmount >= (data.netAmount - data.cashPaid) - 0.01
         && data.dueAmount <= (data.netAmount - data.cashPaid) + 0.01
         && isOptionalString(data, 'notes', 500)
+        && isValidSoftDeleteFields(data)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -493,7 +603,7 @@ service cloud.firestore {
 
       allow delete: if isValidId(clinicId) && isPrimaryAdmin();
 
-      // Tenant Patients Subcollection
+      // Tenant Patients Subcollection (Clients can soft-delete only; Super Admin restores or purges)
       match /patients/{patientId} {
         allow list: if isPrimaryAdmin()
           || (
@@ -508,6 +618,7 @@ service cloud.firestore {
           && isValidId(patientId)
           && isClinicWritable(clinicId)
           && isValidPatientBase(incoming(), true)
+          && isNotCreatingDeleted(incoming())
           && incoming().clinicId == clinicId
           && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
           && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
@@ -528,16 +639,19 @@ service cloud.firestore {
             || (
               incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
+                'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
                 'caseNumber', 'fullName', 'age', 'gender', 'phone',
                 'email', 'address', 'chiefComplaint', 'thermalState',
                 'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
-                'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy', 'updatedAt'
+                'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy',
+                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
               ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(patientId) && isClinicWritable(clinicId);
+        allow delete: if isValidId(clinicId) && isValidId(patientId) && isPrimaryAdmin();
 
         // Tenant Consultations Subcollection
         match /consultations/{consultationId} {
@@ -555,6 +669,7 @@ service cloud.firestore {
             && isValidId(consultationId)
             && isClinicWritable(clinicId)
             && isValidConsultationBase(incoming(), patientId, true)
+            && isNotCreatingDeleted(incoming())
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
             && incoming().clinicId == clinicId
             && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
@@ -578,16 +693,21 @@ service cloud.firestore {
               || (
                 incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+                && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'visitDate', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
-                  'modalitiesWorse', 'modalitiesBetter', 'remedyName', 'potency',
-                  'dosage', 'clinicalNotes', 'nextFollowUpDate', 'photoIds', 'updatedAt'
+                  'visitDate', 'diseaseName', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
+                  'modalitiesWorse', 'modalitiesBetter',
+                  'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
+                  'secondRemedyAfternoon', 'secondRemedyCompanion', 'secondRemedyPotency',
+                  'globulesDose', 'ounceAmount', 'phialCount', 'extraPotency', 'biochemicMedicine',
+                  'remedyName', 'potency', 'dosage', 'clinicalNotes', 'nextFollowUpDate', 'photoIds',
+                  'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
                 ])
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(consultationId)
-            && isClinicWritable(clinicId);
+            && isPrimaryAdmin();
         }
 
         // Tenant Clinical Photos Subcollection
@@ -606,6 +726,7 @@ service cloud.firestore {
             && isValidId(photoId)
             && isClinicWritable(clinicId)
             && isValidPatientPhotoBase(incoming(), patientId, true)
+            && isNotCreatingDeleted(incoming())
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
             && incoming().clinicId == clinicId
             && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
@@ -627,12 +748,16 @@ service cloud.firestore {
               || (
                 incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-                && incoming().diff(existing()).affectedKeys().hasOnly(['caption', 'category', 'consultationId'])
+                && isClientSoftDeleteStateValid(incoming(), existing())
+                && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'caption', 'category', 'consultationId',
+                  'isDeleted', 'deletedAt', 'deletedBy'
+                ])
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(photoId)
-            && isClinicWritable(clinicId);
+            && isPrimaryAdmin();
         }
 
         // Tenant Clinical Notes Subcollection
@@ -651,6 +776,7 @@ service cloud.firestore {
             && isValidId(noteId)
             && isClinicWritable(clinicId)
             && isValidClinicalNoteBase(incoming(), patientId, true)
+            && isNotCreatingDeleted(incoming())
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
             && incoming().clinicId == clinicId
             && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
@@ -674,14 +800,16 @@ service cloud.firestore {
               || (
                 incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+                && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'observedDate', 'focusArea', 'content', 'updatedAt'
+                  'observedDate', 'focusArea', 'content',
+                  'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
                 ])
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(noteId)
-            && isClinicWritable(clinicId);
+            && isPrimaryAdmin();
         }
       }
 
@@ -700,6 +828,7 @@ service cloud.firestore {
           && isValidId(feeId)
           && isClinicWritable(clinicId)
           && isValidFeeRecordBase(incoming(), true)
+          && isNotCreatingDeleted(incoming())
           && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(incoming().patientId))
           && incoming().clinicId == clinicId
           && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
@@ -723,15 +852,16 @@ service cloud.firestore {
             || (
               incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
                 'patientName', 'caseNumber', 'collectedDate', 'feeType',
                 'feeAmount', 'discountAmount', 'netAmount', 'cashPaid', 'dueAmount',
-                'notes', 'updatedAt'
+                'notes', 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
               ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(feeId) && isClinicWritable(clinicId);
+        allow delete: if isValidId(clinicId) && isValidId(feeId) && isPrimaryAdmin();
       }
 
       // Tenant Repertory Clinical Reference Collection
@@ -749,6 +879,7 @@ service cloud.firestore {
           && isValidId(entryId)
           && isClinicWritable(clinicId)
           && isValidRepertoryEntryBase(incoming(), true)
+          && isNotCreatingDeleted(incoming())
           && incoming().clinicId == clinicId
           && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
           && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
@@ -769,14 +900,66 @@ service cloud.firestore {
             || (
               incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
                 'chapter', 'rubric', 'primaryRemedy', 'remedies',
-                'modalities', 'symptomNotes', 'updatedAt'
+                'modalities', 'symptomNotes',
+                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
               ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(entryId) && isClinicWritable(clinicId);
+        allow delete: if isValidId(clinicId) && isValidId(entryId) && isPrimaryAdmin();
+      }
+
+      // Tenant Disease -> Symptoms -> Remedies Database Collection
+      match /disease_remedies/{entryId} {
+        allow list: if isPrimaryAdmin()
+          || (
+            isClientPasswordUser()
+            && request.auth.uid in resource.data.clinicAccessUids
+          );
+
+        allow get: if isValidId(clinicId) && isValidId(entryId)
+          && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
+
+        allow create: if isValidId(clinicId)
+          && isValidId(entryId)
+          && isClinicWritable(clinicId)
+          && isValidDiseaseRemedyEntryBase(incoming(), true)
+          && isNotCreatingDeleted(incoming())
+          && incoming().clinicId == clinicId
+          && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
+          && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+          && incoming().createdBy == request.auth.uid
+          && incoming().createdAt == request.time
+          && incoming().updatedAt == request.time;
+
+        allow update: if isValidId(clinicId)
+          && isValidId(entryId)
+          && isClinicWritable(clinicId)
+          && isValidDiseaseRemedyEntryBase(incoming(), true)
+          && incoming().clinicId == existing().clinicId
+          && incoming().createdBy == existing().createdBy
+          && incoming().createdAt == existing().createdAt
+          && incoming().updatedAt == request.time
+          && (
+            isPrimaryAdmin()
+            || (
+              incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
+              && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              && isClientSoftDeleteStateValid(incoming(), existing())
+              && incoming().diff(existing()).affectedKeys().hasOnly([
+                'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
+                'firstRemedyMorning', 'firstRemedyPotency',
+                'secondRemedyAfternoon', 'secondRemedyPotency',
+                'dosageInstructions', 'clinicalNotes',
+                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
+              ])
+            )
+          );
+
+        allow delete: if isValidId(clinicId) && isValidId(entryId) && isPrimaryAdmin();
       }
     }
 

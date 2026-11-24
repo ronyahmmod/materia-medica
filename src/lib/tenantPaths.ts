@@ -290,6 +290,29 @@ export function tenantRepertoryDoc(clinicId: string, entryId: string) {
   return doc(db, 'clinics', clinicId, 'repertory_entries', entryId);
 }
 
+export function tenantDiseaseRemediesCol(clinicId: string) {
+  return collection(db, 'clinics', clinicId, 'disease_remedies');
+}
+
+export function tenantDiseaseRemedyDoc(clinicId: string, entryId: string) {
+  return doc(db, 'clinics', clinicId, 'disease_remedies', entryId);
+}
+
+export function buildSoftDeletePayload(
+  deletedByUid: string,
+  includeUpdatedAt = true
+): Record<string, unknown> {
+  const payload: Record<string, unknown> = {
+    isDeleted: true,
+    deletedAt: new Date().toISOString().slice(0, 32),
+    deletedBy: deletedByUid,
+  };
+  if (includeUpdatedAt) {
+    payload.updatedAt = serverTimestamp();
+  }
+  return payload;
+}
+
 export function buildDefaultPlatformConfig(uid: string): Omit<PlatformHostingConfig, 'id' | 'updatedAt'> & { updatedAt: ReturnType<typeof serverTimestamp> } {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const publicOrigin = isPrivateDevPreviewUrl(origin) ? '' : origin;
@@ -339,12 +362,14 @@ export async function syncTenantAccessListsAcrossDocs(
     for (const n of notesSnap.docs) docRefsToUpdate.push(n.ref);
   }
 
-  const [feesSnap, repSnap] = await Promise.all([
+  const [feesSnap, repSnap, diseaseSnap] = await Promise.all([
     getDocs(tenantFeesCol(clinicId)),
     getDocs(tenantRepertoryCol(clinicId)),
+    getDocs(tenantDiseaseRemediesCol(clinicId)),
   ]);
   for (const f of feesSnap.docs) docRefsToUpdate.push(f.ref);
   for (const r of repSnap.docs) docRefsToUpdate.push(r.ref);
+  for (const d of diseaseSnap.docs) docRefsToUpdate.push(d.ref);
 
   const CHUNK_SIZE = 400;
   for (let i = 0; i < docRefsToUpdate.length; i += CHUNK_SIZE) {

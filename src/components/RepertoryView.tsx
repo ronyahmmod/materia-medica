@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  deleteDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -36,6 +35,7 @@ import {
 } from '../lib/repertoryApi';
 import {
   ACCENT_THEME_PALETTES,
+  buildSoftDeletePayload,
   tenantRepertoryCol,
   tenantRepertoryDoc,
 } from '../lib/tenantPaths';
@@ -277,10 +277,12 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
     const unsub = onSnapshot(
       source,
       (snapshot) => {
-        const rows = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<RepertoryEntry, 'id'>),
-        }));
+        const rows = snapshot.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<RepertoryEntry, 'id'>),
+          }))
+          .filter((row) => !row.isDeleted);
         rows.sort((a, b) => (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0));
         setEntries(rows);
         setLoading(false);
@@ -969,13 +971,15 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
   };
 
   const handleDeleteEntry = async (entryId: string) => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteDoc(tenantRepertoryDoc(clinic.id, entryId));
+      await updateDoc(tenantRepertoryDoc(clinic.id, entryId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteId(null);
     } catch (error) {
       handleFirestoreError(
         error,
-        OperationType.DELETE,
+        OperationType.UPDATE,
         `clinics/${clinic.id}/repertory_entries/${entryId}`
       );
     }

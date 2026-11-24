@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboa
 import { getDocs, query, where } from 'firebase/firestore';
 import { ArrowRight, Loader2, Search, User, X } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
-import { STATUS_LABELS_I18N } from '../i18n/translations';
+import { PATIENT_TYPE_LABELS_I18N, STATUS_LABELS_I18N } from '../i18n/translations';
 import { tenantPatientsCol } from '../lib/tenantPaths';
 import type { ClinicTenant, Patient, PatientStatus } from '../types/clinic';
 
@@ -42,6 +42,7 @@ export function GlobalPatientSearch({
 }: GlobalPatientSearchProps) {
   const { language, t } = useLanguage();
   const statusLabels = STATUS_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
 
   const [queryText, setQueryText] = useState('');
   const [isOpen, setIsOpen] = useState(false);
@@ -129,10 +130,12 @@ export function GlobalPatientSearch({
                 where('clinicAccessUids', 'array-contains', currentUserUid)
               );
           const snap = await getDocs(source);
-          const rows = snap.docs.map((d) => ({
-            id: d.id,
-            ...(d.data() as Omit<Patient, 'id'>),
-          }));
+          const rows = snap.docs
+            .map((d) => ({
+              id: d.id,
+              ...(d.data() as Omit<Patient, 'id'>),
+            }))
+            .filter((p) => !p.isDeleted);
           return [clinic.id, rows] as const;
         } catch {
           return [clinic.id, [] as Patient[]] as const;
@@ -174,6 +177,7 @@ export function GlobalPatientSearch({
 
     if (activeClinic) {
       for (const pat of activeClinicPatients) {
+        if (pat.isDeleted) continue;
         const key = `${activeClinic.id}:${pat.id}`;
         seen.add(key);
         pool.push({ clinicId: activeClinic.id, clinicName: activeClinic.clinicName, patient: pat });
@@ -184,6 +188,7 @@ export function GlobalPatientSearch({
       const clinicObj = clinicMap.get(cid);
       if (!clinicObj) continue;
       for (const pat of list) {
+        if (pat.isDeleted) continue;
         const key = `${cid}:${pat.id}`;
         if (seen.has(key)) continue;
         seen.add(key);
@@ -210,14 +215,17 @@ export function GlobalPatientSearch({
       const remedyLower = (p.lastRemedy || '').toLowerCase();
       const emailLower = (p.email || '').toLowerCase();
       const notesLower = (p.constitutionNotes || '').toLowerCase();
+      const ownerLower = (p.ownerOrGuardianName || '').toLowerCase();
+      const breedLower = (p.animalSpeciesOrBreed || '').toLowerCase();
+      const typeLower = (p.patientType || 'human').toLowerCase();
 
       let score = 0;
       if (caseLower === q || nameLower === q) score = 100;
       else if (nameLower.startsWith(q) || caseLower.startsWith(q)) score = 80;
       else if (phoneLower.includes(q)) score = 65;
-      else if (nameLower.includes(q) || caseLower.includes(q)) score = 60;
+      else if (nameLower.includes(q) || caseLower.includes(q) || ownerLower.includes(q)) score = 60;
       else if (remedyLower.includes(q)) score = 45;
-      else if (complaintLower.includes(q)) score = 35;
+      else if (complaintLower.includes(q) || breedLower.includes(q) || typeLower.includes(q)) score = 35;
       else if (emailLower.includes(q) || notesLower.includes(q)) score = 20;
 
       if (score > 0) {
@@ -389,6 +397,11 @@ export function GlobalPatientSearch({
                           <span className="text-xs font-semibold text-slate-900 truncate">
                             {p.fullName}
                           </span>
+                          {p.patientType && p.patientType !== 'Human' && (
+                            <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                              {patientTypeLabels[p.patientType]}
+                            </span>
+                          )}
                           <span className="font-mono text-[11px] text-slate-500 tabular-nums">
                             {p.caseNumber}
                           </span>
@@ -398,6 +411,7 @@ export function GlobalPatientSearch({
                         </div>
                         <p className="text-[11px] text-slate-500 truncate mt-0.5">
                           <span className="tabular-nums">{p.phone}</span>
+                          {p.ownerOrGuardianName ? ` · ${p.ownerOrGuardianName}` : ''}
                           {p.lastRemedy ? ` · ${p.lastRemedy}` : ''}
                           {p.chiefComplaint ? ` · ${p.chiefComplaint}` : ''}
                         </p>

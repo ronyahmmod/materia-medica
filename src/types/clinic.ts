@@ -1,6 +1,8 @@
 import type { Timestamp } from 'firebase/firestore';
 
 export type PatientStatus = 'active' | 'follow-up' | 'archived';
+export type PatientType = 'Human' | 'Cow' | 'Goat' | 'Other Animal';
+export type DiseasePatientScope = 'All' | 'Human' | 'Veterinary';
 export type ThermalState = 'Chilly' | 'Hot' | 'Ambithermal' | 'Unspecified';
 export type GenderOption = 'Female' | 'Male' | 'Other';
 export type PhotoCategory = 'portrait' | 'symptom' | 'tongue' | 'skin' | 'prescription';
@@ -10,10 +12,37 @@ export type BillingCycle = 'free' | 'monthly' | 'yearly';
 export type CurrencySymbol = '৳' | '$' | '₹' | '€' | '£';
 export type ClinicAccentTheme = 'teal' | 'indigo' | 'emerald' | 'slate';
 
+export const PATIENT_TYPES: PatientType[] = ['Human', 'Cow', 'Goat', 'Other Animal'];
+export const DISEASE_PATIENT_SCOPES: DiseasePatientScope[] = ['All', 'Human', 'Veterinary'];
 export const CURRENCY_OPTIONS: CurrencySymbol[] = ['৳', '$', '₹', '€', '£'];
 export const ACCENT_THEME_OPTIONS: ClinicAccentTheme[] = ['teal', 'indigo', 'emerald', 'slate'];
 export const SUBSCRIPTION_STATUS_OPTIONS: SubscriptionStatus[] = ['active', 'trial', 'suspended'];
 export const BILLING_CYCLE_OPTIONS: BillingCycle[] = ['free', 'monthly', 'yearly'];
+
+export type RemedyRuleTiming =
+  | 'general'
+  | 'biochemic'
+  | 'morning'
+  | 'afternoon'
+  | 'companion-morning'
+  | 'companion-afternoon';
+
+export const DISEASE_ENTRY_RULE_TYPES: RemedyRuleTiming[] = ['general', 'biochemic'];
+
+export const SYMPTOM_RULE_TIMINGS: RemedyRuleTiming[] = [
+  'general',
+  'biochemic',
+  'morning',
+  'afternoon',
+  'companion-morning',
+  'companion-afternoon',
+];
+
+export const CLINICAL_DISPENSING_PRESETS = {
+  globules: ['৩০ বড়ি', '৪০ বড়ি', '30 globules', '40 globules'],
+  ounces: ['১৫ আউন্স', '৩০ আউন্স', '1 oz', '2 oz'],
+  phials: ['১ ফাইল', '২ ফাইল', '1 phial', '2 phials'],
+} as const;
 
 export type RepertoryChapter =
   | 'Mind'
@@ -115,11 +144,21 @@ export interface PlatformHostingConfig {
   updatedAt: Timestamp;
 }
 
-export interface Patient {
+export interface SoftDeleteMetadata {
+  isDeleted?: boolean;
+  deletedAt?: string;
+  deletedBy?: string;
+  restoredAt?: string;
+}
+
+export interface Patient extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
   clinicAccessUids?: string[];
+  patientType?: PatientType;
+  animalSpeciesOrBreed?: string;
+  ownerOrGuardianName?: string;
   caseNumber: string;
   fullName: string;
   age: number;
@@ -142,18 +181,30 @@ export interface Patient {
   updatedAt: Timestamp;
 }
 
-export interface Consultation {
+export interface Consultation extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
   clinicAccessUids?: string[];
   patientId: string;
   visitDate: string;
+  diseaseName?: string;
   presentingSymptoms: string;
   mentalGenerals?: string;
   physicalGenerals?: string;
   modalitiesWorse?: string;
   modalitiesBetter?: string;
+  firstRemedyMorning?: string;
+  firstRemedyCompanion?: string;
+  firstRemedyPotency?: string;
+  secondRemedyAfternoon?: string;
+  secondRemedyCompanion?: string;
+  secondRemedyPotency?: string;
+  globulesDose?: string;
+  ounceAmount?: string;
+  phialCount?: string;
+  extraPotency?: string;
+  biochemicMedicine?: string;
   remedyName: string;
   potency: string;
   dosage: string;
@@ -165,7 +216,7 @@ export interface Consultation {
   updatedAt: Timestamp;
 }
 
-export interface PatientPhoto {
+export interface PatientPhoto extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
@@ -195,7 +246,7 @@ export interface ClinicSettings {
   updatedAt: Timestamp;
 }
 
-export interface RepertoryEntry {
+export interface RepertoryEntry extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
@@ -211,7 +262,37 @@ export interface RepertoryEntry {
   updatedAt: Timestamp;
 }
 
-export interface ClinicalNote {
+export interface DiseaseSymptomRule {
+  id: string;
+  symptom: string;
+  remedyName: string;
+  potency: string;
+  doseOrUnit?: string;
+  timing: RemedyRuleTiming;
+  notes?: string;
+}
+
+export interface DiseaseRemedyEntry extends SoftDeleteMetadata {
+  id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
+  patientScope: DiseasePatientScope;
+  diseaseName: string;
+  symptoms: string;
+  symptomRules?: DiseaseSymptomRule[];
+  firstRemedyMorning: string;
+  firstRemedyPotency: string;
+  secondRemedyAfternoon?: string;
+  secondRemedyPotency?: string;
+  dosageInstructions?: string;
+  clinicalNotes?: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ClinicalNote extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
@@ -225,7 +306,7 @@ export interface ClinicalNote {
   updatedAt: Timestamp;
 }
 
-export interface FeeRecord {
+export interface FeeRecord extends SoftDeleteMetadata {
   id: string;
   clinicId?: string;
   clinicAccessEmails?: string[];
@@ -328,6 +409,14 @@ export const FIELD_LIMITS = {
   clinicalObservationMax: 4000,
   feeNotesMax: 500,
   feeMaxAmount: 1000000,
+  animalBreedMax: 120,
+  ownerNameMax: 120,
+  diseaseNameMax: 160,
+  diseaseSymptomsMax: 2000,
+  dispensingUnitMax: 40,
+  ruleSymptomMax: 500,
+  ruleUnitMax: 64,
+  ruleNotesMax: 300,
 } as const;
 
 export const CASE_NUMBER_REGEX = /^[a-zA-Z0-9_-]+$/;
@@ -341,6 +430,11 @@ export const COMMON_REMEDIES = [
   'Lycopodium clavatum',
   'Sepia officinalis',
   'Calcarea carbonica',
+  'Calcarea phosphorica',
+  'Calcarea fluorica',
+  'Kali phosphoricum',
+  'Ferrum phosphoricum',
+  'Magnesia phosphorica',
   'Phosphorus',
   'Ignatia amara',
   'Belladonna',
@@ -354,9 +448,19 @@ export const COMMON_REMEDIES = [
   'Thuja occidentalis',
   'Lachesis mutus',
   'Arnica montana',
+  'Aconitum napellus',
+  'Carbo vegetabilis',
+  'Chamomilla',
+  'Ipecacuanha',
+  'Phytolacca decandra',
+  'Colocynthis (Colocynth)',
+  'Dioscorea villosa',
+  'China officinalis (Cinchona)',
 ];
 
 export const POTENCY_OPTIONS = [
+  '6X',
+  '12X',
   '6C',
   '12C',
   '30C',

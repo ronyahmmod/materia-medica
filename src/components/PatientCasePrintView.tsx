@@ -5,6 +5,7 @@ import {
   FEE_CATEGORY_LABELS_I18N,
   GENDER_LABELS_I18N,
   NOTE_FOCUS_LABELS_I18N,
+  PATIENT_TYPE_LABELS_I18N,
   PHOTO_CATEGORY_LABELS_I18N,
   STATUS_LABELS_I18N,
   THERMAL_LABELS_I18N,
@@ -57,6 +58,7 @@ export function PatientCasePrintView({
   const noteFocusLabels = NOTE_FOCUS_LABELS_I18N[language];
   const photoCategoryLabels = PHOTO_CATEGORY_LABELS_I18N[language];
   const feeCategoryLabels = FEE_CATEGORY_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
 
   useEffect(() => {
     if (printOnly) return;
@@ -235,9 +237,25 @@ export function PatientCasePrintView({
           {/* Patient Profile & Constitutional Baseline */}
           <section className="space-y-4">
             <div className="flex flex-col sm:flex-row print:flex-row sm:items-baseline print:items-baseline justify-between gap-2 pb-2 border-b border-slate-200">
-              <h2 className="font-display text-lg font-semibold text-slate-900">
-                {patient.fullName}
-              </h2>
+              <div>
+                <h2 className="font-display text-lg font-semibold text-slate-900">
+                  {patient.fullName}
+                  {patient.patientType && patient.patientType !== 'Human' && (
+                    <span className="ml-2 text-xs font-normal text-amber-800">
+                      [{patientTypeLabels[patient.patientType] || patient.patientType}
+                      {patient.animalSpeciesOrBreed ? ` · ${patient.animalSpeciesOrBreed}` : ''}]
+                    </span>
+                  )}
+                </h2>
+                {patient.ownerOrGuardianName && (
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {patient.patientType && patient.patientType !== 'Human'
+                      ? t('Owner / Caretaker:', 'মালিকের নাম:')
+                      : t('Guardian:', 'অভিভাবক:')}{' '}
+                    {patient.ownerOrGuardianName}
+                  </p>
+                )}
+              </div>
               <p className="text-xs text-slate-600 tabular-nums">
                 {patient.age} {t('yrs', 'বছর')} · {genderLabels[patient.gender] || patient.gender}{' '}
                 · {patient.phone}
@@ -339,21 +357,94 @@ export function PatientCasePrintView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200">
-                    {sortedConsultations.map((con) => (
-                      <tr key={`log-${con.id}`} className="align-top">
-                        <td className="py-2 pr-3 font-mono tabular-nums text-slate-700 whitespace-nowrap">
-                          {con.visitDate}
-                        </td>
-                        <td className="py-2 px-3 font-semibold text-slate-900">{con.remedyName}</td>
-                        <td className="py-2 px-3 font-mono text-teal-800 whitespace-nowrap">
-                          {con.potency}
-                        </td>
-                        <td className="py-2 px-3 text-slate-700">{con.dosage}</td>
-                        <td className="py-2 pl-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
-                          {con.nextFollowUpDate || '—'}
-                        </td>
-                      </tr>
-                    ))}
+                    {sortedConsultations.map((con) => {
+                      const hasDual = Boolean(
+                        con.firstRemedyMorning ||
+                          con.secondRemedyAfternoon ||
+                          con.firstRemedyCompanion ||
+                          con.secondRemedyCompanion
+                      );
+                      const dispensingSummary = [
+                        con.globulesDose ? `${t('Globules', 'বড়ি')}: ${con.globulesDose}` : '',
+                        con.ounceAmount ? `${t('Ounce', 'আউন্স')}: ${con.ounceAmount}` : '',
+                        con.phialCount ? `${t('Phial', 'ফাইল')}: ${con.phialCount}` : '',
+                        con.extraPotency ? `${t('Potency', 'শক্তি')}: ${con.extraPotency}` : '',
+                        con.biochemicMedicine
+                          ? `${t('Biochemic', 'বায়োকেমিক')}: ${con.biochemicMedicine}`
+                          : '',
+                      ]
+                        .filter(Boolean)
+                        .join(' · ');
+
+                      return (
+                        <tr key={`log-${con.id}`} className="align-top">
+                          <td className="py-2 pr-3 font-mono tabular-nums text-slate-700 whitespace-nowrap">
+                            {con.visitDate}
+                            {con.diseaseName && (
+                              <p className="font-sans text-[10px] font-medium text-teal-800 mt-0.5">
+                                {con.diseaseName}
+                              </p>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-slate-900">
+                            {hasDual ? (
+                              <div className="space-y-0.5">
+                                {con.firstRemedyMorning && (
+                                  <p>
+                                    <span className="text-[11px] text-slate-500">
+                                      {t('1st (Morning):', '১ম (সকালে):')}{' '}
+                                    </span>
+                                    <span className="font-semibold">
+                                      {con.firstRemedyMorning}
+                                      {con.firstRemedyCompanion
+                                        ? ` + ${con.firstRemedyCompanion}`
+                                        : ''}
+                                    </span>
+                                  </p>
+                                )}
+                                {(con.secondRemedyAfternoon || con.secondRemedyCompanion) && (
+                                  <p>
+                                    <span className="text-[11px] text-slate-500">
+                                      {t('2nd (Afternoon):', '২য় (বিকালে):')}{' '}
+                                    </span>
+                                    <span className="font-semibold">
+                                      {[con.secondRemedyAfternoon, con.secondRemedyCompanion]
+                                        .filter(Boolean)
+                                        .join(' + ')}
+                                    </span>
+                                  </p>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="font-semibold">{con.remedyName}</span>
+                            )}
+                          </td>
+                          <td className="py-2 px-3 font-mono text-teal-800 whitespace-nowrap">
+                            {hasDual ? (
+                              <div className="space-y-0.5">
+                                {con.firstRemedyMorning && (
+                                  <p>{con.firstRemedyPotency || '—'}</p>
+                                )}
+                                {(con.secondRemedyAfternoon || con.secondRemedyCompanion) && (
+                                  <p>{con.secondRemedyPotency || '—'}</p>
+                                )}
+                              </div>
+                            ) : (
+                              con.potency
+                            )}
+                          </td>
+                          <td className="py-2 px-3 text-slate-700">
+                            <p>{con.dosage}</p>
+                            {dispensingSummary && (
+                              <p className="text-[10px] text-slate-600 mt-0.5">{dispensingSummary}</p>
+                            )}
+                          </td>
+                          <td className="py-2 pl-3 font-mono tabular-nums text-slate-600 whitespace-nowrap">
+                            {con.nextFollowUpDate || '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -378,15 +469,92 @@ export function PatientCasePrintView({
                         <span className="text-[11px] font-mono text-slate-500 tabular-nums">
                           #{idx + 1} · {con.visitDate}
                         </span>
-                        <span className="text-sm font-semibold text-slate-900">
-                          {con.remedyName}
-                        </span>
-                        <span className="font-mono text-xs font-medium text-teal-800">
-                          {con.potency}
-                        </span>
+                        {con.diseaseName && (
+                          <span className="text-[11px] font-semibold text-teal-800">
+                            [{con.diseaseName}]
+                          </span>
+                        )}
+                        {con.firstRemedyMorning || con.secondRemedyAfternoon ? (
+                          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                            {con.firstRemedyMorning && (
+                              <span>
+                                <span className="text-slate-500">
+                                  {t('1st (Morning):', '১ম (সকালে):')}{' '}
+                                </span>
+                                <span className="font-semibold text-slate-900">
+                                  {con.firstRemedyMorning}
+                                  {con.firstRemedyCompanion
+                                    ? ` + ${con.firstRemedyCompanion}`
+                                    : ''}
+                                </span>{' '}
+                                <span className="font-mono font-medium text-teal-800">
+                                  {con.firstRemedyPotency}
+                                </span>
+                              </span>
+                            )}
+                            {(con.secondRemedyAfternoon || con.secondRemedyCompanion) && (
+                              <span>
+                                <span className="text-slate-500">
+                                  {t('2nd (Afternoon):', '২য় (বিকালে):')}{' '}
+                                </span>
+                                <span className="font-semibold text-slate-900">
+                                  {[con.secondRemedyAfternoon, con.secondRemedyCompanion]
+                                    .filter(Boolean)
+                                    .join(' + ')}
+                                </span>{' '}
+                                <span className="font-mono font-medium text-teal-800">
+                                  {con.secondRemedyPotency}
+                                </span>
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-sm font-semibold text-slate-900">
+                              {con.remedyName}
+                            </span>
+                            <span className="font-mono text-xs font-medium text-teal-800">
+                              {con.potency}
+                            </span>
+                          </>
+                        )}
                       </div>
                       <span className="text-xs text-slate-600">{con.dosage}</span>
                     </div>
+
+                    {(con.globulesDose ||
+                      con.ounceAmount ||
+                      con.phialCount ||
+                      con.extraPotency ||
+                      con.biochemicMedicine) && (
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-700">
+                        {con.globulesDose && (
+                          <span className="px-2 py-0.5 border border-slate-200 rounded bg-slate-50">
+                            {t('Globules:', 'বড়ি:')} {con.globulesDose}
+                          </span>
+                        )}
+                        {con.ounceAmount && (
+                          <span className="px-2 py-0.5 border border-slate-200 rounded bg-slate-50">
+                            {t('Ounce:', 'আউন্স:')} {con.ounceAmount}
+                          </span>
+                        )}
+                        {con.phialCount && (
+                          <span className="px-2 py-0.5 border border-slate-200 rounded bg-slate-50">
+                            {t('Phial:', 'ফাইল:')} {con.phialCount}
+                          </span>
+                        )}
+                        {con.extraPotency && (
+                          <span className="px-2 py-0.5 border border-slate-200 rounded bg-slate-50 font-mono">
+                            {t('Potency:', 'শক্তি:')} {con.extraPotency}
+                          </span>
+                        )}
+                        {con.biochemicMedicine && (
+                          <span className="px-2 py-0.5 border border-teal-200 rounded bg-teal-50 font-medium text-teal-900">
+                            {t('Biochemic:', 'বায়োকেমিক:')} {con.biochemicMedicine}
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     <div className="text-xs">
                       <p className="font-semibold text-slate-500 mb-0.5">

@@ -2,17 +2,67 @@ import type {
   BillingCycle,
   ClinicAccentTheme,
   ClinicalNoteFocus,
+  DiseasePatientScope,
   FeeCategory,
   GenderOption,
   PatientStatus,
+  PatientType,
   PhotoCategory,
   PlanTier,
+  RemedyRuleTiming,
   RepertoryChapter,
   SubscriptionStatus,
   ThermalState,
 } from '../types/clinic';
 
 export type AppLanguage = 'en' | 'bn';
+
+export const REMEDY_TIMING_LABELS_I18N: Record<AppLanguage, Record<RemedyRuleTiming, string>> = {
+  en: {
+    general: 'Homeopathic (Schedule at Visit)',
+    morning: '1st Remedy (Morning)',
+    afternoon: '2nd Remedy (Afternoon)',
+    'companion-morning': '1st Companion Remedy',
+    'companion-afternoon': '2nd Companion Remedy',
+    biochemic: 'Biochemic',
+  },
+  bn: {
+    general: 'হোমিওপ্যাথিক (ভিজিটে সময় ঠিক হবে)',
+    morning: '১ম ঔষধ (সকালে)',
+    afternoon: '২য় ঔষধ (বিকালে)',
+    'companion-morning': '১ম সহায়ক ঔষধ',
+    'companion-afternoon': '২য় সহায়ক ঔষধ',
+    biochemic: 'বায়োকেমিক',
+  },
+};
+
+export const PATIENT_TYPE_LABELS_I18N: Record<AppLanguage, Record<PatientType, string>> = {
+  en: {
+    Human: 'Human',
+    Cow: 'Cow / Cattle',
+    Goat: 'Goat',
+    'Other Animal': 'Other Animal',
+  },
+  bn: {
+    Human: 'মানুষ (Human)',
+    Cow: 'গরু (Cow)',
+    Goat: 'ছাগল (Goat)',
+    'Other Animal': 'অন্যান্য প্রাণী',
+  },
+};
+
+export const DISEASE_SCOPE_LABELS_I18N: Record<AppLanguage, Record<DiseasePatientScope, string>> = {
+  en: {
+    All: 'Human & Veterinary',
+    Human: 'Human Only',
+    Veterinary: 'Veterinary (Cow / Goat)',
+  },
+  bn: {
+    All: 'মানুষ ও পশু উভয়',
+    Human: 'শুধুমাত্র মানুষ',
+    Veterinary: 'পশুচিকিৎসা (গরু / ছাগল)',
+  },
+};
 
 export const STATUS_LABELS_I18N: Record<AppLanguage, Record<PatientStatus, string>> = {
   en: {

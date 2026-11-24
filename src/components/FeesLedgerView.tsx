@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { deleteDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { serverTimestamp, updateDoc } from 'firebase/firestore';
 import {
   Banknote,
   CheckCircle2,
@@ -9,7 +9,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { FEE_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import {
@@ -18,7 +18,7 @@ import {
   roundAmount,
   summarizeFees,
 } from '../lib/feeCalculations';
-import { ACCENT_THEME_PALETTES, tenantFeeDoc } from '../lib/tenantPaths';
+import { ACCENT_THEME_PALETTES, buildSoftDeletePayload, tenantFeeDoc } from '../lib/tenantPaths';
 import type { ClinicTenant, FeeRecord, Patient } from '../types/clinic';
 import { FeeEntryModal } from './FeeEntryModal';
 
@@ -158,12 +158,14 @@ export function FeesLedgerView({
 
   const handleDeleteFee = async (feeId: string) => {
     setActionError(null);
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteDoc(tenantFeeDoc(clinic.id, feeId));
+      await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteId(null);
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.DELETE, `clinics/${clinic.id}/fee_records/${feeId}`);
+        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${feeId}`);
       }
       setActionError(
         error instanceof Error

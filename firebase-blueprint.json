@@ -252,6 +252,19 @@
           "type": "array",
           "description": "Authorized clinic Firebase Auth UIDs mirrored from parent clinic for zero-index list isolation"
         },
+        "patientType": {
+          "type": "string",
+          "enum": ["Human", "Cow", "Goat", "Other Animal"],
+          "description": "Patient species category (Human or veterinary animal)"
+        },
+        "animalSpeciesOrBreed": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerOrGuardianName": {
+          "type": "string",
+          "maxLength": 120
+        },
         "caseNumber": {
           "type": "string",
           "description": "Unique clinic case identifier",
@@ -261,7 +274,7 @@
         },
         "fullName": {
           "type": "string",
-          "description": "Patient full name",
+          "description": "Patient full name or animal name/tag",
           "minLength": 1,
           "maxLength": 120
         },
@@ -330,6 +343,21 @@
           "type": "string",
           "maxLength": 160
         },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
+        },
         "createdBy": {
           "type": "string",
           "minLength": 1,
@@ -359,7 +387,7 @@
     },
     "Consultation": {
       "title": "Consultation",
-      "description": "Homeopathic case-taking, constitutional evaluation, and remedy prescription log.",
+      "description": "Homeopathic case-taking, constitutional evaluation, and morning/afternoon remedy prescription log.",
       "type": "object",
       "properties": {
         "clinicId": {
@@ -404,6 +432,54 @@
           "type": "string",
           "maxLength": 500
         },
+        "diseaseName": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "firstRemedyMorning": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "firstRemedyCompanion": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "firstRemedyPotency": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "secondRemedyAfternoon": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "secondRemedyCompanion": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "secondRemedyPotency": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "globulesDose": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "ounceAmount": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "phialCount": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "extraPotency": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "biochemicMedicine": {
+          "type": "string",
+          "maxLength": 160
+        },
         "remedyName": {
           "type": "string",
           "minLength": 1,
@@ -430,6 +506,21 @@
         "photoIds": {
           "type": "array",
           "description": "Bounded list of attached clinical photo IDs (max 10)"
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
         },
         "createdBy": {
           "type": "string",
@@ -506,6 +597,21 @@
         "consultationId": {
           "type": "string",
           "maxLength": 128
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
         },
         "uploadedBy": {
           "type": "string",
@@ -662,6 +768,21 @@
           "description": "Clinical keynotes and differentiation pearls",
           "maxLength": 1500
         },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
+        },
         "createdBy": {
           "type": "string",
           "minLength": 1,
@@ -681,6 +802,105 @@
         "rubric",
         "primaryRemedy",
         "remedies",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "DiseaseRemedyEntry": {
+      "title": "DiseaseRemedyEntry",
+      "description": "Custom per-clinic Disease -> Symptoms -> Recommended Remedies database for Human and Veterinary cases.",
+      "type": "object",
+      "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
+        "patientScope": {
+          "type": "string",
+          "enum": ["All", "Human", "Veterinary"]
+        },
+        "diseaseName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "symptoms": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        },
+        "firstRemedyMorning": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "firstRemedyPotency": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32
+        },
+        "secondRemedyAfternoon": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "secondRemedyPotency": {
+          "type": "string",
+          "maxLength": 32
+        },
+        "symptomRules": {
+          "type": "array",
+          "description": "Bounded list of multi-symptom to specific remedy/potency/unit rules (max 50) under this disease; timing defaults to 'general' or 'biochemic' and is scheduled to morning/afternoon at visit time"
+        },
+        "dosageInstructions": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "clinicalNotes": {
+          "type": "string",
+          "maxLength": 1500
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "patientScope",
+        "diseaseName",
+        "symptoms",
+        "firstRemedyMorning",
+        "firstRemedyPotency",
         "createdBy",
         "createdAt",
         "updatedAt"
@@ -725,6 +945,21 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 4000
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
         },
         "createdBy": {
           "type": "string",
@@ -819,6 +1054,21 @@
           "type": "string",
           "maxLength": 500
         },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "deletedAt": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "deletedBy": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "restoredAt": {
+          "type": "string",
+          "maxLength": 40
+        },
         "createdBy": {
           "type": "string",
           "minLength": 1,
@@ -857,7 +1107,7 @@
     },
     "/clinic_public/{slug}": {
       "schema": { "$ref": "#/entities/ClinicPublicProfile" },
-      "description": "Non-PII public white-label storefront metadata keyed by URL slug."
+      "description": "Non-PII public white-label branding metadata keyed by URL slug."
     },
     "/platform_config/{configId}": {
       "schema": { "$ref": "#/entities/PlatformHostingConfig" },
@@ -865,7 +1115,7 @@
     },
     "/clinics/{clinicId}/patients/{patientId}": {
       "schema": { "$ref": "#/entities/Patient" },
-      "description": "Tenant-isolated homeopathic patient profiles."
+      "description": "Tenant-isolated homeopathic patient profiles (Human and Veterinary)."
     },
     "/clinics/{clinicId}/patients/{patientId}/consultations/{consultationId}": {
       "schema": { "$ref": "#/entities/Consultation" },
@@ -886,6 +1136,10 @@
     "/clinics/{clinicId}/repertory_entries/{entryId}": {
       "schema": { "$ref": "#/entities/RepertoryEntry" },
       "description": "Tenant-isolated homeopathic repertory rubrics and remedy references."
+    },
+    "/clinics/{clinicId}/disease_remedies/{entryId}": {
+      "schema": { "$ref": "#/entities/DiseaseRemedyEntry" },
+      "description": "Tenant-isolated disease, symptoms, and recommended remedies guide."
     },
     "/patients/{patientId}": {
       "schema": { "$ref": "#/entities/Patient" },

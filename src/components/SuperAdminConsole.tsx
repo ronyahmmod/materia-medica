@@ -5,9 +5,11 @@ import {
   getDocs,
   serverTimestamp,
   setDoc,
+  updateDoc,
   writeBatch,
 } from 'firebase/firestore';
 import {
+  ArchiveRestore,
   ArrowRight,
   Building2,
   Check,
@@ -22,6 +24,7 @@ import {
   PlayCircle,
   Plus,
   RefreshCw,
+  RotateCcw,
   Server,
   ShieldCheck,
   Trash2,
@@ -43,6 +46,8 @@ import {
   sanitizeShareBaseUrl,
   tenantConsultationDoc,
   tenantConsultationsCol,
+  tenantDiseaseRemediesCol,
+  tenantDiseaseRemedyDoc,
   tenantFeeDoc,
   tenantFeesCol,
   tenantNoteDoc,
@@ -62,7 +67,31 @@ import {
   type PlatformHostingConfig,
 } from '../types/clinic';
 
-type ConsoleTab = 'clients' | 'subscriptions' | 'hosting';
+type ConsoleTab = 'clients' | 'subscriptions' | 'hosting' | 'backup';
+
+type DeletedRecordKind =
+  | 'patient'
+  | 'consultation'
+  | 'photo'
+  | 'note'
+  | 'fee'
+  | 'repertory'
+  | 'disease';
+
+interface DeletedBackupItem {
+  key: string;
+  kind: DeletedRecordKind;
+  clinicId: string;
+  clinicName: string;
+  docId: string;
+  patientId?: string;
+  title: string;
+  subtitle: string;
+  deletedAt: string;
+  deletedBy?: string;
+  ref: ReturnType<typeof doc>;
+  hasUpdatedAt: boolean;
+}
 
 interface LegacyScanSummary {
   patients: number;
@@ -137,6 +166,15 @@ export function SuperAdminConsole({
   );
   const [migratingLegacy, setMigratingLegacy] = useState(false);
   const [migrationNotice, setMigrationNotice] = useState<string | null>(null);
+
+  // Deleted Backup & Restore State
+  const [backupClinicFilter, setBackupClinicFilter] = useState<string>('all');
+  const [backupKindFilter, setBackupKindFilter] = useState<'all' | DeletedRecordKind>('all');
+  const [backupItems, setBackupItems] = useState<DeletedBackupItem[]>([]);
+  const [scanningBackup, setScanningBackup] = useState(false);
+  const [backupScannedOnce, setBackupScannedOnce] = useState(false);
+  const [restoringKey, setRestoringKey] = useState<string | null>(null);
+  const [backupNotice, setBackupNotice] = useState<string | null>(null);
 
   useEffect(() => {
     setPlatformName(platformConfig.platformName);
@@ -241,12 +279,14 @@ export function SuperAdminConsole({
         refsToDelete.push(pat.ref);
       }
 
-      const [feesSnap, repSnap] = await Promise.all([
+      const [feesSnap, repSnap, diseaseSnap] = await Promise.all([
         getDocs(tenantFeesCol(clinic.id)),
         getDocs(tenantRepertoryCol(clinic.id)),
+        getDocs(tenantDiseaseRemediesCol(clinic.id)),
       ]);
       for (const f of feesSnap.docs) refsToDelete.push(f.ref);
       for (const r of repSnap.docs) refsToDelete.push(r.ref);
+      for (const d of diseaseSnap.docs) refsToDelete.push(d.ref);
 
       refsToDelete.push(doc(db, 'clinics', clinic.id));
       refsToDelete.push(doc(db, 'clinic_public', clinic.slug));
@@ -582,6 +622,304 @@ export function SuperAdminConsole({
     }
   };
 
+  const handleScanDeletedBackup = async () => {
+    setScanningBackup(true);
+    setConsoleError(null);
+    setBackupNotice(null);
+    try {
+      const targetClinics =
+        backupClinicFilter === 'all'
+          ? clinics
+          : clinics.filter((c) => c.id === backupClinicFilter);
+
+      const collected: DeletedBackupItem[] = [];
+
+      for (const clinic of targetClinics) {
+        const [patientsSnap, feesSnap, repSnap, diseaseSnap] = await Promise.all([
+          getDocs(tenantPatientsCol(clinic.id)),
+          getDocs(tenantFeesCol(clinic.id)),
+          getDocs(tenantRepertoryCol(clinic.id)),
+          getDocs(tenantDiseaseRemediesCol(clinic.id)),
+        ]);
+
+        for (const patDoc of patientsSnap.docs) {
+          const patData = patDoc.data() as Record<string, unknown>;
+          const patName = String(patData.fullName || patDoc.id);
+          const caseNo = String(patData.caseNumber || '');
+
+          if (patData.isDeleted === true) {
+            collected.push({
+              key: `pat:${clinic.id}:${patDoc.id}`,
+              kind: 'patient',
+              clinicId: clinic.id,
+              clinicName: clinic.clinicName,
+              docId: patDoc.id,
+              patientId: patDoc.id,
+              title: `${patName}${caseNo ? ` (${caseNo})` : ''}`,
+              subtitle: String(patData.chiefComplaint || patData.phone || ''),
+              deletedAt: String(patData.deletedAt || ''),
+              deletedBy: typeof patData.deletedBy === 'string' ? patData.deletedBy : undefined,
+              ref: patDoc.ref,
+              hasUpdatedAt: true,
+            });
+          }
+
+          const [consSnap, photosSnap, notesSnap] = await Promise.all([
+            getDocs(tenantConsultationsCol(clinic.id, patDoc.id)),
+            getDocs(tenantPhotosCol(clinic.id, patDoc.id)),
+            getDocs(tenantNotesCol(clinic.id, patDoc.id)),
+          ]);
+
+          for (const cDoc of consSnap.docs) {
+            const cData = cDoc.data() as Record<string, unknown>;
+            if (cData.isDeleted === true) {
+              collected.push({
+                key: `con:${clinic.id}:${patDoc.id}:${cDoc.id}`,
+                kind: 'consultation',
+                clinicId: clinic.id,
+                clinicName: clinic.clinicName,
+                docId: cDoc.id,
+                patientId: patDoc.id,
+                title: `${patName} · ${String(cData.visitDate || '')}`,
+                subtitle: `${String(cData.remedyName || '')} ${String(cData.potency || '')} — ${String(cData.presentingSymptoms || '').slice(0, 90)}`,
+                deletedAt: String(cData.deletedAt || ''),
+                deletedBy: typeof cData.deletedBy === 'string' ? cData.deletedBy : undefined,
+                ref: cDoc.ref,
+                hasUpdatedAt: true,
+              });
+            }
+          }
+
+          for (const phDoc of photosSnap.docs) {
+            const phData = phDoc.data() as Record<string, unknown>;
+            if (phData.isDeleted === true) {
+              collected.push({
+                key: `pho:${clinic.id}:${patDoc.id}:${phDoc.id}`,
+                kind: 'photo',
+                clinicId: clinic.id,
+                clinicName: clinic.clinicName,
+                docId: phDoc.id,
+                patientId: patDoc.id,
+                title: `${patName} · ${String(phData.caption || phData.fileName || phDoc.id)}`,
+                subtitle: `${String(phData.category || 'photo')} · ${formatBytes(Number(phData.sizeBytes || 0))}`,
+                deletedAt: String(phData.deletedAt || ''),
+                deletedBy: typeof phData.deletedBy === 'string' ? phData.deletedBy : undefined,
+                ref: phDoc.ref,
+                hasUpdatedAt: false,
+              });
+            }
+          }
+
+          for (const nDoc of notesSnap.docs) {
+            const nData = nDoc.data() as Record<string, unknown>;
+            if (nData.isDeleted === true) {
+              collected.push({
+                key: `note:${clinic.id}:${patDoc.id}:${nDoc.id}`,
+                kind: 'note',
+                clinicId: clinic.id,
+                clinicName: clinic.clinicName,
+                docId: nDoc.id,
+                patientId: patDoc.id,
+                title: `${patName} · ${String(nData.observedDate || '')} (${String(nData.focusArea || '')})`,
+                subtitle: String(nData.content || '').slice(0, 100),
+                deletedAt: String(nData.deletedAt || ''),
+                deletedBy: typeof nData.deletedBy === 'string' ? nData.deletedBy : undefined,
+                ref: nDoc.ref,
+                hasUpdatedAt: true,
+              });
+            }
+          }
+        }
+
+        for (const fDoc of feesSnap.docs) {
+          const fData = fDoc.data() as Record<string, unknown>;
+          if (fData.isDeleted === true) {
+            collected.push({
+              key: `fee:${clinic.id}:${fDoc.id}`,
+              kind: 'fee',
+              clinicId: clinic.id,
+              clinicName: clinic.clinicName,
+              docId: fDoc.id,
+              patientId: typeof fData.patientId === 'string' ? fData.patientId : undefined,
+              title: `${String(fData.patientName || '')} (${String(fData.caseNumber || '')}) · ${String(fData.collectedDate || '')}`,
+              subtitle: `${String(fData.feeType || 'fee')} · Net ${String(fData.netAmount ?? 0)} · Cash ${String(fData.cashPaid ?? 0)}`,
+              deletedAt: String(fData.deletedAt || ''),
+              deletedBy: typeof fData.deletedBy === 'string' ? fData.deletedBy : undefined,
+              ref: fDoc.ref,
+              hasUpdatedAt: true,
+            });
+          }
+        }
+
+        for (const rDoc of repSnap.docs) {
+          const rData = rDoc.data() as Record<string, unknown>;
+          if (rData.isDeleted === true) {
+            collected.push({
+              key: `rep:${clinic.id}:${rDoc.id}`,
+              kind: 'repertory',
+              clinicId: clinic.id,
+              clinicName: clinic.clinicName,
+              docId: rDoc.id,
+              title: `${String(rData.chapter || '')} · ${String(rData.primaryRemedy || '')}`,
+              subtitle: String(rData.rubric || ''),
+              deletedAt: String(rData.deletedAt || ''),
+              deletedBy: typeof rData.deletedBy === 'string' ? rData.deletedBy : undefined,
+              ref: rDoc.ref,
+              hasUpdatedAt: true,
+            });
+          }
+        }
+
+        for (const dDoc of diseaseSnap.docs) {
+          const dData = dDoc.data() as Record<string, unknown>;
+          if (dData.isDeleted === true) {
+            collected.push({
+              key: `dis:${clinic.id}:${dDoc.id}`,
+              kind: 'disease',
+              clinicId: clinic.id,
+              clinicName: clinic.clinicName,
+              docId: dDoc.id,
+              title: `${String(dData.diseaseName || '')} (${String(dData.patientScope || 'All')})`,
+              subtitle: `${String(dData.firstRemedyMorning || '')} ${String(dData.firstRemedyPotency || '')}`,
+              deletedAt: String(dData.deletedAt || ''),
+              deletedBy: typeof dData.deletedBy === 'string' ? dData.deletedBy : undefined,
+              ref: dDoc.ref,
+              hasUpdatedAt: true,
+            });
+          }
+        }
+      }
+
+      collected.sort((a, b) => b.deletedAt.localeCompare(a.deletedAt));
+      setBackupItems(collected);
+      setBackupScannedOnce(true);
+    } catch (err) {
+      setConsoleError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setScanningBackup(false);
+    }
+  };
+
+  const handleRestoreBackupItem = async (item: DeletedBackupItem) => {
+    setRestoringKey(item.key);
+    setConsoleError(null);
+    setBackupNotice(null);
+    const restoredIso = new Date().toISOString().slice(0, 32);
+
+    try {
+      if (item.kind === 'patient' && item.patientId) {
+        // Restore patient AND cascade-restore all soft-deleted sub-records belonging to this patient
+        const childMatches = backupItems.filter(
+          (other) =>
+            other.clinicId === item.clinicId &&
+            other.patientId === item.patientId &&
+            other.key !== item.key
+        );
+
+        const batch = writeBatch(db);
+        batch.update(item.ref, {
+          isDeleted: false,
+          restoredAt: restoredIso,
+          updatedAt: serverTimestamp(),
+        });
+
+        for (const child of childMatches) {
+          batch.update(child.ref, {
+            isDeleted: false,
+            restoredAt: restoredIso,
+            ...(child.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
+          });
+        }
+        await batch.commit();
+
+        const restoredKeys = new Set([item.key, ...childMatches.map((c) => c.key)]);
+        setBackupItems((prev) => prev.filter((x) => !restoredKeys.has(x.key)));
+        setBackupNotice(
+          t(
+            `Restored patient "${item.title}" along with ${childMatches.length} linked record(s).`,
+            `রোগী "${item.title}" এবং সংযুক্ত ${childMatches.length}টি রেকর্ড পুনরুদ্ধার করা হয়েছে।`
+          )
+        );
+      } else {
+        // If restoring a child sub-record of a soft-deleted patient, also ensure parent patient is restored
+        const parentPatientDeleted = item.patientId
+          ? backupItems.find(
+              (other) =>
+                other.kind === 'patient' &&
+                other.clinicId === item.clinicId &&
+                other.patientId === item.patientId
+            )
+          : undefined;
+
+        if (parentPatientDeleted) {
+          const batch = writeBatch(db);
+          batch.update(parentPatientDeleted.ref, {
+            isDeleted: false,
+            restoredAt: restoredIso,
+            updatedAt: serverTimestamp(),
+          });
+          batch.update(item.ref, {
+            isDeleted: false,
+            restoredAt: restoredIso,
+            ...(item.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
+          });
+          await batch.commit();
+          const restoredKeys = new Set([item.key, parentPatientDeleted.key]);
+          setBackupItems((prev) => prev.filter((x) => !restoredKeys.has(x.key)));
+        } else {
+          await updateDoc(item.ref, {
+            isDeleted: false,
+            restoredAt: restoredIso,
+            ...(item.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
+          });
+          setBackupItems((prev) => prev.filter((x) => x.key !== item.key));
+        }
+
+        setBackupNotice(
+          t(
+            `Restored "${item.title}" back into "${item.clinicName}".`,
+            `"${item.title}" সফলভাবে "${item.clinicName}"-এ পুনরুদ্ধার করা হয়েছে।`
+          )
+        );
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setConsoleError(msg);
+      if (msg.toLowerCase().includes('permission')) {
+        handleFirestoreError(err, OperationType.UPDATE, item.ref.path);
+      }
+    } finally {
+      setRestoringKey(null);
+    }
+  };
+
+  const filteredBackupItems = useMemo(() => {
+    return backupItems.filter((item) => {
+      if (backupClinicFilter !== 'all' && item.clinicId !== backupClinicFilter) return false;
+      if (backupKindFilter !== 'all' && item.kind !== backupKindFilter) return false;
+      return true;
+    });
+  }, [backupItems, backupClinicFilter, backupKindFilter]);
+
+  const backupKindLabel = (kind: DeletedRecordKind): string => {
+    switch (kind) {
+      case 'patient':
+        return t('Patient', 'রোগী');
+      case 'consultation':
+        return t('Visit / Remedy', 'ভিজিট / ঔষধ');
+      case 'photo':
+        return t('Photo', 'ছবি');
+      case 'note':
+        return t('Clinical Note', 'ক্লিনিক্যাল নোট');
+      case 'fee':
+        return t('Cash Fee', 'নগদ ফি');
+      case 'repertory':
+        return t('Repertory', 'রেপার্টরি');
+      case 'disease':
+        return t('Disease Guide', 'রোগ ও ঔষধ');
+    }
+  };
+
   return (
     <div className="space-y-6">
       {/* Super Admin Hero Header */}
@@ -713,6 +1051,11 @@ export function SuperAdminConsole({
               id: 'hosting',
               label: t('Hosting, Health & Migration', 'হোস্টিং, হেলথ ও মাইগ্রেশন'),
               icon: Server,
+            },
+            {
+              id: 'backup',
+              label: t('Deleted Backup & Restore', 'ডিলিট ব্যাকআপ ও রিস্টোর'),
+              icon: ArchiveRestore,
             },
           ] as const
         ).map((tab) => {
@@ -1455,6 +1798,182 @@ export function SuperAdminConsole({
             )}
           </section>
         </div>
+      )}
+
+      {/* TAB 4: DELETED BACKUP & RESTORE (ZERO HARD DELETE RECOVERY) */}
+      {activeTab === 'backup' && (
+        <section className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
+          <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+            <div>
+              <h2 className="font-display text-base font-semibold text-slate-900 flex items-center gap-2">
+                <ArchiveRestore className="w-4 h-4 text-teal-700" />
+                <span>
+                  {t(
+                    'Soft-Deleted Records Backup & Recovery',
+                    'মুছে ফেলা তথ্যের ব্যাকআপ ও পুনরুদ্ধার'
+                  )}
+                </span>
+              </h2>
+              <p className="text-xs text-slate-500 mt-1">
+                {t(
+                  'Client clinics can never permanently erase records or photos. Inspect soft-deleted patients, visits, fees, notes, photos, and disease guides here and restore them anytime.',
+                  'ক্লায়েন্টরা কোনো তথ্য স্থায়ীভাবে মুছতে পারে না। ক্লায়েন্টের মুছে ফেলা রোগী, ভিজিট, ফি, নোট, ছবি এবং রোগের তালিকা এখান থেকে স্ক্যান করে ফিরিয়ে আনুন।'
+                )}
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+              <select
+                value={backupClinicFilter}
+                onChange={(e) => setBackupClinicFilter(e.target.value)}
+                aria-label={t('Filter by clinic', 'ক্লিনিক নির্বাচন')}
+                className="px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg"
+              >
+                <option value="all">{t('All Clinics', 'সব ক্লিনিক')}</option>
+                {clinics.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.clinicName}
+                  </option>
+                ))}
+              </select>
+
+              <button
+                type="button"
+                disabled={scanningBackup || clinics.length === 0}
+                onClick={handleScanDeletedBackup}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                {scanningBackup ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <RefreshCw className="w-3.5 h-3.5" />
+                )}
+                {scanningBackup
+                  ? t('Scanning Backup...', 'ব্যাকআপ স্ক্যান হচ্ছে...')
+                  : t('Scan Deleted Backup', 'ডিলিট ব্যাকআপ স্ক্যান করুন')}
+              </button>
+            </div>
+          </div>
+
+          {backupNotice && (
+            <div className="border border-emerald-200 bg-emerald-50 rounded-lg p-3 text-xs text-emerald-900">
+              {backupNotice}
+            </div>
+          )}
+
+          {backupScannedOnce && backupItems.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+              {(
+                [
+                  'all',
+                  'patient',
+                  'consultation',
+                  'fee',
+                  'note',
+                  'photo',
+                  'disease',
+                  'repertory',
+                ] as const
+              ).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => setBackupKindFilter(kind)}
+                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                    backupKindFilter === kind
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  {kind === 'all' ? t('All Types', 'সব ধরন') : backupKindLabel(kind)}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {!backupScannedOnce ? (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-10 text-center">
+              <ArchiveRestore className="w-7 h-7 text-slate-400 mx-auto mb-2.5" />
+              <h3 className="font-display text-sm font-semibold text-slate-900">
+                {t('Ready to inspect clinic backups', 'ক্লিনিক ব্যাকআপ যাচাই করতে প্রস্তুত')}
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
+                {t(
+                  'Click "Scan Deleted Backup" above to fetch all soft-deleted items preserved across your hosted clinics.',
+                  'ক্লিনিকগুলোতে মুছে ফেলা সব সংরক্ষিত তথ্য দেখতে উপরে "ডিলিট ব্যাকআপ স্ক্যান করুন" বাটনে ক্লিক করুন।'
+                )}
+              </p>
+            </div>
+          ) : filteredBackupItems.length === 0 ? (
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-10 text-center">
+              <p className="text-sm font-medium text-slate-800">
+                {t('No deleted backup records found', 'মুছে ফেলা কোনো রেকর্ড পাওয়া যায়নি')}
+              </p>
+              <p className="text-xs text-slate-500 mt-1">
+                {t(
+                  'All scanned records are currently active, or none match the selected filter.',
+                  'স্ক্যান করা সব তথ্য সক্রিয় রয়েছে অথবা বর্তমান ফিল্টারে কোনো মুছে ফেলা রেকর্ড নেই।'
+                )}
+              </p>
+            </div>
+          ) : (
+            <div className="border border-slate-200 rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500">
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Type', 'ধরন')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Clinic', 'ক্লিনিক')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Record Details', 'তথ্যের বিবরণ')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Deleted At', 'ডিলিটের সময়')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Restore', 'পুনরুদ্ধার')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200">
+                    {filteredBackupItems.map((item) => (
+                      <tr key={item.key} className="hover:bg-slate-50/70 align-top">
+                        <td className="py-3 px-4 whitespace-nowrap">
+                          <span className="px-2 py-0.5 text-[11px] font-medium bg-slate-100 text-slate-800 border border-slate-200 rounded">
+                            {backupKindLabel(item.kind)}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4 font-medium text-slate-800 whitespace-nowrap">
+                          {item.clinicName}
+                        </td>
+                        <td className="py-3 px-4 max-w-md">
+                          <p className="font-semibold text-slate-900">{item.title}</p>
+                          {item.subtitle && (
+                            <p className="text-[11px] text-slate-500 mt-0.5 truncate">
+                              {item.subtitle}
+                            </p>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 font-mono text-[11px] text-slate-500 whitespace-nowrap tabular-nums">
+                          {item.deletedAt ? item.deletedAt.replace('T', ' ').slice(0, 19) : '—'}
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap">
+                          <button
+                            type="button"
+                            disabled={restoringKey === item.key}
+                            onClick={() => handleRestoreBackupItem(item)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 disabled:opacity-50 transition-colors cursor-pointer"
+                          >
+                            {restoringKey === item.key ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <RotateCcw className="w-3 h-3" />
+                            )}
+                            {t('Restore', 'পুনরুদ্ধার করুন')}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
       )}
     </div>
   );

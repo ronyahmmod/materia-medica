@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
-  deleteDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -31,13 +30,14 @@ import {
 import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { formatCashAmount, roundAmount, summarizeFees } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
-import { deleteServerPhoto, uploadClinicalPhoto } from '../lib/photoApi';
+import { uploadClinicalPhoto } from '../lib/photoApi';
 import {
   fetchNoteRepertorySuggestions,
   type NoteRepertorySuggestion,
 } from '../lib/repertoryApi';
 import {
   ACCENT_THEME_PALETTES,
+  buildSoftDeletePayload,
   tenantConsultationDoc,
   tenantConsultationsCol,
   tenantFeeDoc,
@@ -52,6 +52,7 @@ import {
   FEE_CATEGORY_LABELS_I18N,
   GENDER_LABELS_I18N,
   NOTE_FOCUS_LABELS_I18N,
+  PATIENT_TYPE_LABELS_I18N,
   PHOTO_CATEGORY_LABELS_I18N,
   STATUS_LABELS_I18N,
   THERMAL_LABELS_I18N,
@@ -104,6 +105,7 @@ export function PatientDetailView({
   const feeCategoryLabels = FEE_CATEGORY_LABELS_I18N[language];
   const thermalLabels = THERMAL_LABELS_I18N[language];
   const genderLabels = GENDER_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [clinicalNotes, setClinicalNotes] = useState<ClinicalNote[]>([]);
   const [photos, setPhotos] = useState<PatientPhoto[]>([]);
@@ -191,10 +193,12 @@ export function PatientDetailView({
     const unsubCons = onSnapshot(
       consSource,
       (snapshot) => {
-        const rows = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<Consultation, 'id'>),
-        }));
+        const rows = snapshot.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<Consultation, 'id'>),
+          }))
+          .filter((row) => !row.isDeleted);
         rows.sort((a, b) => (b.visitDate || '').localeCompare(a.visitDate || ''));
         setConsultations(rows);
         setLoadingSubdata(false);
@@ -207,10 +211,12 @@ export function PatientDetailView({
     const unsubPhotos = onSnapshot(
       photosSource,
       (snapshot) => {
-        const rows = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<PatientPhoto, 'id'>),
-        }));
+        const rows = snapshot.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<PatientPhoto, 'id'>),
+          }))
+          .filter((row) => !row.isDeleted);
         rows.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
         setPhotos(rows);
       },
@@ -222,10 +228,12 @@ export function PatientDetailView({
     const unsubNotes = onSnapshot(
       notesSource,
       (snapshot) => {
-        const rows = snapshot.docs.map((d) => ({
-          id: d.id,
-          ...(d.data() as Omit<ClinicalNote, 'id'>),
-        }));
+        const rows = snapshot.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<ClinicalNote, 'id'>),
+          }))
+          .filter((row) => !row.isDeleted);
         rows.sort((a, b) => (b.observedDate || '').localeCompare(a.observedDate || ''));
         setClinicalNotes(rows);
       },
@@ -402,9 +410,13 @@ export function PatientDetailView({
 
   const handleDeletePhoto = async (photo: PatientPhoto) => {
     setActionError(null);
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteServerPhoto(patient.id, photo.fileName, photo.url, clinic.id);
-      await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id));
+      await updateDoc(
+        tenantPhotoDoc(clinic.id, patient.id, photo.id),
+        buildSoftDeletePayload(uid, false)
+      );
       if (patient.portraitPhotoId === photo.id) {
         await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
           portraitUrl: '',
@@ -420,7 +432,7 @@ export function PatientDetailView({
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
         handleFirestoreError(
           error,
-          OperationType.DELETE,
+          OperationType.UPDATE,
           `clinics/${clinic.id}/patients/${patient.id}/photos/${photo.id}`
         );
       }
@@ -434,12 +446,17 @@ export function PatientDetailView({
 
   const handleDeleteConsultation = async (consultationId: string) => {
     setActionError(null);
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId));
+      await updateDoc(
+        tenantConsultationDoc(clinic.id, patient.id, consultationId),
+        buildSoftDeletePayload(uid, true)
+      );
     } catch (error) {
       handleFirestoreError(
         error,
-        OperationType.DELETE,
+        OperationType.UPDATE,
         `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`
       );
     }
@@ -535,13 +552,18 @@ export function PatientDetailView({
 
   const handleDeleteClinicalNote = async (noteId: string) => {
     setActionError(null);
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteDoc(tenantNoteDoc(clinic.id, patient.id, noteId));
+      await updateDoc(
+        tenantNoteDoc(clinic.id, patient.id, noteId),
+        buildSoftDeletePayload(uid, true)
+      );
       setConfirmDeleteNoteId(null);
     } catch (error) {
       handleFirestoreError(
         error,
-        OperationType.DELETE,
+        OperationType.UPDATE,
         `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`
       );
     }
@@ -597,7 +619,8 @@ export function PatientDetailView({
     return clinicalNotes.filter((n) => n.focusArea === noteFilter);
   }, [clinicalNotes, noteFilter]);
 
-  const patientFeeSummary = useMemo(() => summarizeFees(feeRecords), [feeRecords]);
+  const visibleFeeRecords = useMemo(() => feeRecords.filter((f) => !f.isDeleted), [feeRecords]);
+  const patientFeeSummary = useMemo(() => summarizeFees(visibleFeeRecords), [visibleFeeRecords]);
 
   const handleConfirmSettleFee = async (rec: FeeRecord) => {
     setActionError(null);
@@ -645,12 +668,14 @@ export function PatientDetailView({
 
   const handleDeleteFeeRecord = async (feeId: string) => {
     setActionError(null);
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     try {
-      await deleteDoc(tenantFeeDoc(clinic.id, feeId));
+      await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteFeeId(null);
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.DELETE, `clinics/${clinic.id}/fee_records/${feeId}`);
+        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${feeId}`);
       }
       setActionError(
         error instanceof Error
@@ -661,28 +686,35 @@ export function PatientDetailView({
   };
 
   const handleDeleteFullPatient = async () => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
     setDeletingPatient(true);
     setActionError(null);
     try {
+      const softDeleteNoUpdated = buildSoftDeletePayload(uid, false);
+      const softDeleteWithUpdated = buildSoftDeletePayload(uid, true);
+
       for (const photo of photos) {
-        await deleteServerPhoto(patient.id, photo.fileName, photo.url, clinic.id);
-        await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id));
+        await updateDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id), softDeleteNoUpdated);
       }
       for (const con of consultations) {
-        await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, con.id));
+        await updateDoc(
+          tenantConsultationDoc(clinic.id, patient.id, con.id),
+          softDeleteWithUpdated
+        );
       }
       for (const note of clinicalNotes) {
-        await deleteDoc(tenantNoteDoc(clinic.id, patient.id, note.id));
+        await updateDoc(tenantNoteDoc(clinic.id, patient.id, note.id), softDeleteWithUpdated);
       }
-      for (const fee of feeRecords) {
-        await deleteDoc(tenantFeeDoc(clinic.id, fee.id));
+      for (const fee of visibleFeeRecords) {
+        await updateDoc(tenantFeeDoc(clinic.id, fee.id), softDeleteWithUpdated);
       }
-      await deleteDoc(tenantPatientDoc(clinic.id, patient.id));
+      await updateDoc(tenantPatientDoc(clinic.id, patient.id), softDeleteWithUpdated);
       onPhotoStorageChanged();
       onDeletedPatient();
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.DELETE, `clinics/${clinic.id}/patients/${patient.id}`);
+        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/patients/${patient.id}`);
       }
       setActionError(
         error instanceof Error
@@ -700,8 +732,8 @@ export function PatientDetailView({
   };
 
   const quickTargetFeeRecord = useMemo(
-    () => feeRecords.find((rec) => rec.dueAmount > 0) || feeRecords[0] || null,
-    [feeRecords]
+    () => visibleFeeRecords.find((rec) => rec.dueAmount > 0) || visibleFeeRecords[0] || null,
+    [visibleFeeRecords]
   );
 
   const handleQuickAddRemedyLog = () => {
@@ -867,6 +899,15 @@ export function PatientDetailView({
                 <span className="font-mono font-medium text-slate-700 tabular-nums">
                   {patient.caseNumber}
                 </span>
+                {patient.patientType && patient.patientType !== 'Human' && (
+                  <>
+                    <span aria-hidden="true">·</span>
+                    <span className="px-2 py-0.5 text-[11px] font-medium bg-amber-50 text-amber-900 border border-amber-200 rounded-md">
+                      {patientTypeLabels[patient.patientType] || patient.patientType}
+                      {patient.animalSpeciesOrBreed ? ` (${patient.animalSpeciesOrBreed})` : ''}
+                    </span>
+                  </>
+                )}
                 <span aria-hidden="true">·</span>
                 <span className="tabular-nums">
                   {patient.age} {t('yrs', 'বছর')}
@@ -879,6 +920,14 @@ export function PatientDetailView({
               <h1 className="font-display text-2xl font-semibold text-slate-900 tracking-tight">
                 {patient.fullName}
               </h1>
+              {patient.ownerOrGuardianName && (
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {patient.patientType && patient.patientType !== 'Human'
+                    ? t('Owner / Caretaker:', 'মালিকের নাম:')
+                    : t('Guardian:', 'অভিভাবক:')}{' '}
+                  <span className="font-medium text-slate-700">{patient.ownerOrGuardianName}</span>
+                </p>
+              )}
               <p className="text-sm text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
                 {patient.chiefComplaint}
               </p>
@@ -915,7 +964,7 @@ export function PatientDetailView({
                   <span className="text-slate-800 font-medium">{patient.nextFollowUpDate}</span>
                 </p>
               )}
-              {feeRecords.length > 0 && (
+              {visibleFeeRecords.length > 0 && (
                 <button
                   type="button"
                   onClick={() => setActiveTab('fees')}
@@ -1035,7 +1084,7 @@ export function PatientDetailView({
             }`}
           >
             <Banknote className="w-3.5 h-3.5 text-teal-700" />
-            {t('Cash Fees', 'নগদ ফি')} ({feeRecords.length})
+            {t('Cash Fees', 'নগদ ফি')} ({visibleFeeRecords.length})
           </button>
         </div>
 
@@ -1114,11 +1163,17 @@ export function PatientDetailView({
                   className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
                 >
                   <div className="flex flex-wrap items-start justify-between gap-4 pb-4 border-b border-slate-200">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 tabular-nums mb-1">
+                    <div className="space-y-1.5">
+                      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500 tabular-nums">
                         <span>
                           {t('Visit', 'ভিজিট')} {con.visitDate}
                         </span>
+                        {con.diseaseName && (
+                          <>
+                            <span aria-hidden="true">·</span>
+                            <span className="font-semibold text-teal-800">{con.diseaseName}</span>
+                          </>
+                        )}
                         {con.nextFollowUpDate && (
                           <>
                             <span aria-hidden="true">·</span>
@@ -1128,13 +1183,85 @@ export function PatientDetailView({
                           </>
                         )}
                       </div>
-                      <h3 className="font-display text-base font-semibold text-slate-900">
-                        {con.remedyName}{' '}
-                        <span className="font-mono text-sm font-medium text-teal-800 ml-1">
-                          {con.potency}
-                        </span>
-                      </h3>
-                      <p className="text-xs text-slate-600 mt-0.5">{con.dosage}</p>
+                      {con.firstRemedyMorning || con.secondRemedyAfternoon ? (
+                        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                          {con.firstRemedyMorning && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-xs">
+                              <span className="text-[11px] font-medium text-amber-800">
+                                {t('1st (Morning):', '১ম (সকালে):')}
+                              </span>
+                              <span className="font-semibold text-slate-900">
+                                {con.firstRemedyMorning}
+                                {con.firstRemedyCompanion ? ` + ${con.firstRemedyCompanion}` : ''}
+                              </span>
+                              {con.firstRemedyPotency && (
+                                <span className="font-mono font-semibold text-teal-800">
+                                  {con.firstRemedyPotency}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                          {(con.secondRemedyAfternoon || con.secondRemedyCompanion) && (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-sky-50 border border-sky-200 text-xs">
+                              <span className="text-[11px] font-medium text-sky-800">
+                                {t('2nd (Afternoon):', '২য় (বিকালে):')}
+                              </span>
+                              <span className="font-semibold text-slate-900">
+                                {[con.secondRemedyAfternoon, con.secondRemedyCompanion]
+                                  .filter(Boolean)
+                                  .join(' + ')}
+                              </span>
+                              {con.secondRemedyPotency && (
+                                <span className="font-mono font-semibold text-teal-800">
+                                  {con.secondRemedyPotency}
+                                </span>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      ) : (
+                        <h3 className="font-display text-base font-semibold text-slate-900">
+                          {con.remedyName}{' '}
+                          <span className="font-mono text-sm font-medium text-teal-800 ml-1">
+                            {con.potency}
+                          </span>
+                        </h3>
+                      )}
+
+                      {(con.globulesDose ||
+                        con.ounceAmount ||
+                        con.phialCount ||
+                        con.extraPotency ||
+                        con.biochemicMedicine) && (
+                        <div className="flex flex-wrap items-center gap-1.5 pt-0.5 text-[11px]">
+                          {con.globulesDose && (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800">
+                              {t('Globules:', 'বড়ি:')} {con.globulesDose}
+                            </span>
+                          )}
+                          {con.ounceAmount && (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800">
+                              {t('Ounce:', 'আউন্স:')} {con.ounceAmount}
+                            </span>
+                          )}
+                          {con.phialCount && (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 text-slate-800">
+                              {t('Phial:', 'ফাইল:')} {con.phialCount}
+                            </span>
+                          )}
+                          {con.extraPotency && (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-200 font-mono text-teal-800">
+                              {t('Potency:', 'শক্তি:')} {con.extraPotency}
+                            </span>
+                          )}
+                          {con.biochemicMedicine && (
+                            <span className="px-2 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-900 font-medium">
+                              {t('Biochemic:', 'বায়োকেমিক:')} {con.biochemicMedicine}
+                            </span>
+                          )}
+                        </div>
+                      )}
+                      {con.dosage && <p className="text-xs text-slate-600">{con.dosage}</p>}
                     </div>
 
                     <button
@@ -1704,7 +1831,7 @@ export function PatientDetailView({
             </div>
           </div>
 
-          {feeRecords.length === 0 ? (
+          {visibleFeeRecords.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-10 text-center">
               <Banknote className="w-6 h-6 text-slate-400 mx-auto mb-2.5" />
               <h3 className="font-display text-base font-semibold text-slate-900">
@@ -1745,7 +1872,7 @@ export function PatientDetailView({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-200 text-xs tabular-nums">
-                    {feeRecords.map((rec) => {
+                    {visibleFeeRecords.map((rec) => {
                       const isSettling = settlingFeeId === rec.id;
                       const isDeleting = confirmDeleteFeeId === rec.id;
                       return (
@@ -1991,6 +2118,7 @@ export function PatientDetailView({
         <ConsultationFormModal
           clinic={clinic}
           patient={patient}
+          isSuperAdmin={isSuperAdmin}
           onClose={() => setShowConsultationModal(false)}
           onSaved={() => {
             setShowConsultationModal(false);
@@ -2288,7 +2416,7 @@ export function PatientDetailView({
         consultations={consultations}
         clinicalNotes={clinicalNotes}
         photos={photos}
-        feeRecords={feeRecords}
+        feeRecords={visibleFeeRecords}
         clinicName={clinic.clinicName}
         practitionerName={clinic.practitionerName}
         clinicPhone={clinic.phone}

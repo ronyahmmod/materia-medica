@@ -14,6 +14,7 @@ import {
 } from 'firebase/firestore';
 import {
   Banknote,
+  BookMarked,
   BookOpen,
   Building2,
   CalendarClock,
@@ -24,6 +25,7 @@ import {
   LogOut,
   Menu,
   PauseCircle,
+  Pill,
   Plus,
   Search,
   ShieldCheck,
@@ -32,6 +34,7 @@ import {
 } from 'lucide-react';
 import { AdminSignInView } from './components/AdminSignInView';
 import { ClinicFormModal } from './components/ClinicFormModal';
+import { DiseaseDatabaseView } from './components/DiseaseDatabaseView';
 import { FeesLedgerView } from './components/FeesLedgerView';
 import { PatientAgeChart } from './components/PatientAgeChart';
 import { PatientDetailView } from './components/PatientDetailView';
@@ -39,6 +42,7 @@ import { PatientFormModal } from './components/PatientFormModal';
 import { PlanAndHostingView } from './components/PlanAndHostingView';
 import { CopyrightFooter } from './components/CopyrightFooter';
 import { GlobalPatientSearch } from './components/GlobalPatientSearch';
+import { RemedyReverseLookupView } from './components/RemedyReverseLookupView';
 import { RepertoryView } from './components/RepertoryView';
 import { SecureClinicalImage } from './components/SecureClinicalImage';
 import { SuperAdminConsole } from './components/SuperAdminConsole';
@@ -46,6 +50,7 @@ import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { LanguageSwitcher, useLanguage } from './i18n/LanguageContext';
 import {
   GENDER_LABELS_I18N,
+  PATIENT_TYPE_LABELS_I18N,
   PLAN_LABELS_I18N,
   STATUS_LABELS_I18N,
 } from './i18n/translations';
@@ -83,7 +88,15 @@ import {
   type PlatformHostingConfig,
 } from './types/clinic';
 
-type NavSection = 'overview' | 'patients' | 'follow-ups' | 'fees' | 'repertory' | 'plan';
+type NavSection =
+  | 'overview'
+  | 'patients'
+  | 'follow-ups'
+  | 'fees'
+  | 'repertory'
+  | 'diseases'
+  | 'medicines'
+  | 'plan';
 
 const FALLBACK_PLATFORM_CONFIG: PlatformHostingConfig = {
   id: DEFAULT_PLATFORM_CONFIG_ID,
@@ -546,6 +559,7 @@ export default function App() {
       (snapshot) => {
         const list = snapshot.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<Patient, 'id'>) }))
+          .filter((p) => !p.isDeleted)
           .sort((a, b) => timestampMillis(b.updatedAt) - timestampMillis(a.updatedAt));
         setPatients(list);
         setLoadingPatients(false);
@@ -562,6 +576,7 @@ export default function App() {
       (snapshot) => {
         const list = snapshot.docs
           .map((d) => ({ id: d.id, ...(d.data() as Omit<FeeRecord, 'id'>) }))
+          .filter((f) => !f.isDeleted)
           .sort((a, b) => (b.collectedDate || '').localeCompare(a.collectedDate || ''));
         setFeeRecords(list);
         setLoadingFees(false);
@@ -608,7 +623,10 @@ export default function App() {
         p.caseNumber.toLowerCase().includes(q) ||
         p.phone.toLowerCase().includes(q) ||
         p.chiefComplaint.toLowerCase().includes(q) ||
-        (p.lastRemedy || '').toLowerCase().includes(q)
+        (p.lastRemedy || '').toLowerCase().includes(q) ||
+        (p.ownerOrGuardianName || '').toLowerCase().includes(q) ||
+        (p.animalSpeciesOrBreed || '').toLowerCase().includes(q) ||
+        (p.patientType || '').toLowerCase().includes(q)
       );
     });
   }, [patients, searchQuery, statusFilter]);
@@ -741,6 +759,7 @@ export default function App() {
 
   const statusLabels = STATUS_LABELS_I18N[language];
   const genderLabels = GENDER_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
   const currentPlanLabel = activeClinic
     ? PLAN_LABELS_I18N[language][activeClinic.planTier].name
     : '';
@@ -783,13 +802,19 @@ export default function App() {
               ? t('Cash Fees & Ledger', 'নগদ ফি ও হিসাব')
               : activeNav === 'repertory'
                 ? t('Clinical Repertory', 'ক্লিনিক্যাল রেপার্টরি')
-                : t('Subscription & Clinic URL', 'সাবস্ক্রিপশন ও ক্লিনিক URL');
+                : activeNav === 'diseases'
+                  ? t('Disease & Remedies', 'রোগ ও ঔষধ ডেটাবেস')
+                  : activeNav === 'medicines'
+                    ? t('Remedy Lookup (Reverse)', 'ঔষধ নির্দেশিকা (রিভার্স)')
+                    : t('Subscription & Clinic URL', 'সাবস্ক্রিপশন ও ক্লিনিক URL');
 
   const navItems: { id: NavSection; label: string; icon: typeof LayoutDashboard }[] = [
     { id: 'overview', label: t('Overview', 'সারসংক্ষেপ'), icon: LayoutDashboard },
     { id: 'patients', label: t('Patients', 'রোগী'), icon: Users },
     { id: 'follow-ups', label: t('Follow-ups', 'ফলো-আপ'), icon: CalendarClock },
     { id: 'fees', label: t('Cash Fees', 'নগদ ফি'), icon: Banknote },
+    { id: 'diseases', label: t('Disease & Remedies', 'রোগ ও ঔষধ'), icon: BookMarked },
+    { id: 'medicines', label: t('Remedy Lookup (Reverse)', 'ঔষধ নির্দেশিকা (রিভার্স)'), icon: Pill },
     { id: 'repertory', label: t('Repertory', 'রেপার্টরি'), icon: BookOpen },
     { id: 'plan', label: t('Subscription & URL', 'প্ল্যান ও URL'), icon: CreditCard },
   ];
@@ -1209,6 +1234,26 @@ export default function App() {
             />
           ) : activeNav === 'repertory' ? (
             <RepertoryView clinic={activeClinic} isSuperAdmin={effectiveIsSuperAdmin} />
+          ) : activeNav === 'diseases' ? (
+            <DiseaseDatabaseView
+              clinic={activeClinic}
+              patients={patients}
+              isSuperAdmin={effectiveIsSuperAdmin}
+              onConsultationSaved={(patientId) => {
+                setSelectedPatientId(patientId);
+                void refreshStorageStats();
+              }}
+            />
+          ) : activeNav === 'medicines' ? (
+            <RemedyReverseLookupView
+              clinic={activeClinic}
+              patients={patients}
+              isSuperAdmin={effectiveIsSuperAdmin}
+              onConsultationSaved={(patientId) => {
+                setSelectedPatientId(patientId);
+                void refreshStorageStats();
+              }}
+            />
           ) : activeNav === 'plan' ? (
             <PlanAndHostingView
               clinic={activeClinic}
@@ -1353,9 +1398,20 @@ export default function App() {
                                     />
                                   </div>
                                   <div>
-                                    <p className="font-medium text-slate-900">{patient.fullName}</p>
+                                    <div className="flex items-center gap-1.5">
+                                      <p className="font-medium text-slate-900">{patient.fullName}</p>
+                                      {patient.patientType && patient.patientType !== 'Human' && (
+                                        <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-50 text-amber-900 border border-amber-200 rounded">
+                                          {patientTypeLabels[patient.patientType] ||
+                                            patient.patientType}
+                                        </span>
+                                      )}
+                                    </div>
                                     <p className="text-[11px] text-slate-500 tabular-nums">
                                       {patient.phone}
+                                      {patient.ownerOrGuardianName
+                                        ? ` · ${patient.ownerOrGuardianName}`
+                                        : ''}
                                     </p>
                                   </div>
                                 </div>
@@ -1425,10 +1481,22 @@ export default function App() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 text-xs text-slate-500 mb-0.5 tabular-nums">
                             <span className="font-mono text-slate-700">{patient.caseNumber}</span>
+                            {patient.patientType && patient.patientType !== 'Human' && (
+                              <span className="px-1.5 py-0.5 text-[10px] font-medium bg-amber-50 text-amber-900 border border-amber-200 rounded">
+                                {patientTypeLabels[patient.patientType] || patient.patientType}
+                              </span>
+                            )}
                             <span aria-hidden="true">·</span>
                             <span>{patient.phone}</span>
                           </div>
-                          <p className="text-sm font-semibold text-slate-900">{patient.fullName}</p>
+                          <p className="text-sm font-semibold text-slate-900">
+                            {patient.fullName}
+                            {patient.ownerOrGuardianName ? (
+                              <span className="text-xs font-normal text-slate-500 ml-2">
+                                ({patient.ownerOrGuardianName})
+                              </span>
+                            ) : null}
+                          </p>
                           <p className="text-xs text-slate-600 mt-0.5">
                             {patient.lastRemedy
                               ? `${t('Last remedy:', 'সর্বশেষ রেমেডি:')} ${patient.lastRemedy}`

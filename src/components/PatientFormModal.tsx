@@ -12,16 +12,19 @@ import {
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   GENDER_LABELS_I18N,
+  PATIENT_TYPE_LABELS_I18N,
   STATUS_LABELS_I18N,
   THERMAL_LABELS_I18N,
 } from '../i18n/translations';
 import {
   CASE_NUMBER_REGEX,
   FIELD_LIMITS,
+  PATIENT_TYPES,
   type ClinicTenant,
   type GenderOption,
   type Patient,
   type PatientStatus,
+  type PatientType,
   type ThermalState,
 } from '../types/clinic';
 
@@ -53,12 +56,22 @@ export function PatientFormModal({
   const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
   const { language, t } = useLanguage();
   const genderLabels = GENDER_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
   const thermalLabels = THERMAL_LABELS_I18N[language];
   const statusLabels = STATUS_LABELS_I18N[language];
 
   const isEditing = Boolean(existingPatient);
   const atFreeLimit = !isEditing && currentPatientCount >= patientLimit;
 
+  const [patientType, setPatientType] = useState<PatientType>(
+    existingPatient?.patientType || 'Human'
+  );
+  const [ownerOrGuardianName, setOwnerOrGuardianName] = useState(
+    existingPatient?.ownerOrGuardianName || ''
+  );
+  const [animalSpeciesOrBreed, setAnimalSpeciesOrBreed] = useState(
+    existingPatient?.animalSpeciesOrBreed || ''
+  );
   const [caseNumber, setCaseNumber] = useState(
     existingPatient?.caseNumber || nextSuggestedCaseNumber
   );
@@ -66,6 +79,7 @@ export function PatientFormModal({
   const [age, setAge] = useState(existingPatient ? String(existingPatient.age) : '');
   const [gender, setGender] = useState<GenderOption>(existingPatient?.gender || 'Female');
   const [phone, setPhone] = useState(existingPatient?.phone || '');
+  const isVeterinary = patientType !== 'Human';
   const [email, setEmail] = useState(existingPatient?.email || '');
   const [address, setAddress] = useState(existingPatient?.address || '');
   const [chiefComplaint, setChiefComplaint] = useState(existingPatient?.chiefComplaint || '');
@@ -163,6 +177,7 @@ export function PatientFormModal({
       let portraitPhotoId = existingPatient?.portraitPhotoId;
 
       const basePayload: Record<string, unknown> = {
+        patientType,
         caseNumber: trimmedCase.slice(0, FIELD_LIMITS.caseNumberMax),
         fullName: trimmedName.slice(0, FIELD_LIMITS.fullNameMax),
         age: Math.round(numericAge),
@@ -174,6 +189,16 @@ export function PatientFormModal({
         updatedAt: serverTimestamp(),
       };
 
+      if (ownerOrGuardianName.trim()) {
+        basePayload.ownerOrGuardianName = ownerOrGuardianName
+          .trim()
+          .slice(0, FIELD_LIMITS.ownerNameMax);
+      }
+      if (animalSpeciesOrBreed.trim()) {
+        basePayload.animalSpeciesOrBreed = animalSpeciesOrBreed
+          .trim()
+          .slice(0, FIELD_LIMITS.animalBreedMax);
+      }
       if (email.trim()) basePayload.email = email.trim().slice(0, FIELD_LIMITS.emailMax);
       if (address.trim()) basePayload.address = address.trim().slice(0, FIELD_LIMITS.addressMax);
       if (constitutionNotes.trim()) {
@@ -306,6 +331,32 @@ export function PatientFormModal({
         )}
 
         <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[78vh] overflow-y-auto">
+          {/* Patient Type Selector (Human & Veterinary) */}
+          <div>
+            <label className="block text-xs font-medium text-slate-700 mb-1.5">
+              {t('Patient Species / Category *', 'রোগীর ধরন (মানুষ / গরু / ছাগল) *')}
+            </label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {PATIENT_TYPES.map((pt) => {
+                const selected = patientType === pt;
+                return (
+                  <button
+                    key={pt}
+                    type="button"
+                    onClick={() => setPatientType(pt)}
+                    className={`px-3 py-2 text-xs font-medium rounded-lg border transition-colors cursor-pointer text-center ${
+                      selected
+                        ? `${palette.softPanel} border-current font-semibold`
+                        : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    {patientTypeLabels[pt]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
@@ -324,7 +375,9 @@ export function PatientFormModal({
 
             <div className="sm:col-span-2">
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                {t('Patient Full Name *', 'রোগীর পূর্ণ নাম *')}
+                {isVeterinary
+                  ? t('Animal Name / Tag / Color *', 'পশুর নাম / ট্যাগ / বর্ণনা *')
+                  : t('Patient Full Name *', 'রোগীর পূর্ণ নাম *')}
               </label>
               <input
                 type="text"
@@ -332,7 +385,53 @@ export function PatientFormModal({
                 maxLength={FIELD_LIMITS.fullNameMax}
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                placeholder={t('e.g. Ananya Roy', 'যেমন: অনন্যা রায়')}
+                placeholder={
+                  isVeterinary
+                    ? t('e.g. Lalmoni Cow #12 / Black Goat', 'যেমন: লালমণি গাভী / কালো ছাগল')
+                    : t('e.g. Ananya Roy', 'যেমন: অনন্যা রায়')
+                }
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+              />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                {isVeterinary
+                  ? t('Owner / Farmer Name', 'মালিক / খামারির নাম')
+                  : t('Guardian Name (Optional)', 'অভিভাবকের নাম (ঐচ্ছিক)')}
+              </label>
+              <input
+                type="text"
+                maxLength={FIELD_LIMITS.ownerNameMax}
+                value={ownerOrGuardianName}
+                onChange={(e) => setOwnerOrGuardianName(e.target.value)}
+                placeholder={
+                  isVeterinary
+                    ? t('e.g. Md. Karim Uddin', 'যেমন: মোঃ করিম উদ্দিন')
+                    : t('e.g. Father / Spouse name', 'যেমন: পিতা / স্বামীর নাম')
+                }
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                {isVeterinary
+                  ? t('Breed / Species / Weight Details', 'জাত / প্রজাতি / ওজন বিবরণ')
+                  : t('Occupation / Additional ID (Optional)', 'পেশা / অতিরিক্ত পরিচিতি (ঐচ্ছিক)')}
+              </label>
+              <input
+                type="text"
+                maxLength={FIELD_LIMITS.animalBreedMax}
+                value={animalSpeciesOrBreed}
+                onChange={(e) => setAnimalSpeciesOrBreed(e.target.value)}
+                placeholder={
+                  isVeterinary
+                    ? t('e.g. Friesian Cross · 320 kg', 'যেমন: ফ্রিজিয়ান ক্রস · ৩২০ কেজি / ব্ল্যাক বেঙ্গল')
+                    : t('e.g. Teacher / Student', 'যেমন: শিক্ষক / গৃহিণী')
+                }
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
               />
             </div>

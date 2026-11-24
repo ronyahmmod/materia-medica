@@ -1,6 +1,15 @@
-import { useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
-import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { Banknote, Calculator, Upload, X } from 'lucide-react';
+import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { getDocs, query, serverTimestamp, setDoc, updateDoc, where } from 'firebase/firestore';
+import {
+  Banknote,
+  BookMarked,
+  Calculator,
+  Check,
+  Search,
+  Sparkles,
+  Upload,
+  X,
+} from 'lucide-react';
 import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { computeFeeBreakdown, formatCashAmount } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
@@ -8,24 +17,54 @@ import { uploadClinicalPhoto } from '../lib/photoApi';
 import {
   ACCENT_THEME_PALETTES,
   tenantConsultationDoc,
+  tenantDiseaseRemediesCol,
   tenantFeeDoc,
   tenantPatientDoc,
   tenantPhotoDoc,
 } from '../lib/tenantPaths';
 import { useLanguage } from '../i18n/LanguageContext';
-import { PHOTO_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import {
+  DISEASE_SCOPE_LABELS_I18N,
+  PATIENT_TYPE_LABELS_I18N,
+  PHOTO_CATEGORY_LABELS_I18N,
+  REMEDY_TIMING_LABELS_I18N,
+} from '../i18n/translations';
+import {
+  CLINICAL_DISPENSING_PRESETS,
   COMMON_REMEDIES,
   FIELD_LIMITS,
   POTENCY_OPTIONS,
   type ClinicTenant,
+  type DiseaseRemedyEntry,
+  type DiseaseSymptomRule,
   type Patient,
   type PhotoCategory,
+  type RemedyRuleTiming,
 } from '../types/clinic';
+
+export interface ConsultationPrefill {
+  diseaseName?: string;
+  presentingSymptoms?: string;
+  firstRemedyMorning?: string;
+  firstRemedyCompanion?: string;
+  firstRemedyPotency?: string;
+  secondRemedyAfternoon?: string;
+  secondRemedyCompanion?: string;
+  secondRemedyPotency?: string;
+  globulesDose?: string;
+  ounceAmount?: string;
+  phialCount?: string;
+  extraPotency?: string;
+  biochemicMedicine?: string;
+  dosage?: string;
+  clinicalNotes?: string;
+}
 
 interface ConsultationFormModalProps {
   clinic: ClinicTenant;
   patient: Patient;
+  isSuperAdmin?: boolean;
+  prefill?: ConsultationPrefill | null;
   onClose: () => void;
   onSaved: () => void;
 }
@@ -39,9 +78,16 @@ interface PendingAttachment {
   compressedBytes: number;
 }
 
+interface FlatSymptomMatch {
+  entry: DiseaseRemedyEntry;
+  rule: DiseaseSymptomRule;
+}
+
 export function ConsultationFormModal({
   clinic,
   patient,
+  isSuperAdmin = false,
+  prefill = null,
   onClose,
   onSaved,
 }: ConsultationFormModalProps) {
@@ -49,21 +95,82 @@ export function ConsultationFormModal({
   const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
   const currency = clinic.currencySymbol || '৳';
   const photoCategoryLabels = PHOTO_CATEGORY_LABELS_I18N[language];
+  const patientTypeLabels = PATIENT_TYPE_LABELS_I18N[language];
+  const scopeLabels = DISEASE_SCOPE_LABELS_I18N[language];
+  const timingLabels = REMEDY_TIMING_LABELS_I18N[language];
   const todayStr = new Date().toISOString().slice(0, 10);
 
+  const isVetPatient = Boolean(patient.patientType && patient.patientType !== 'Human');
+
   const [visitDate, setVisitDate] = useState(todayStr);
-  const [presentingSymptoms, setPresentingSymptoms] = useState('');
+  const [diseaseName, setDiseaseName] = useState(prefill?.diseaseName || '');
+  const [presentingSymptoms, setPresentingSymptoms] = useState(
+    prefill?.presentingSymptoms || ''
+  );
   const [mentalGenerals, setMentalGenerals] = useState('');
   const [physicalGenerals, setPhysicalGenerals] = useState('');
   const [modalitiesWorse, setModalitiesWorse] = useState('');
   const [modalitiesBetter, setModalitiesBetter] = useState('');
-  const [remedyName, setRemedyName] = useState('');
-  const [potency, setPotency] = useState('200C');
-  const [dosage, setDosage] = useState(() =>
-    t('3 globules once daily for 5 days', '৩টি গ্লোবিউলস দিনে একবার ৫ দিন')
+
+  // Morning (1st) & Afternoon (2nd) structured remedies + companion remedies + potencies
+  const [firstRemedyMorning, setFirstRemedyMorning] = useState(
+    prefill?.firstRemedyMorning || ''
   );
-  const [clinicalNotes, setClinicalNotes] = useState('');
+  const [firstRemedyCompanion, setFirstRemedyCompanion] = useState(
+    prefill?.firstRemedyCompanion || ''
+  );
+  const [firstRemedyPotency, setFirstRemedyPotency] = useState(
+    prefill?.firstRemedyPotency || '200C'
+  );
+  const [secondRemedyAfternoon, setSecondRemedyAfternoon] = useState(
+    prefill?.secondRemedyAfternoon || ''
+  );
+  const [secondRemedyCompanion, setSecondRemedyCompanion] = useState(
+    prefill?.secondRemedyCompanion || ''
+  );
+  const [secondRemedyPotency, setSecondRemedyPotency] = useState(
+    prefill?.secondRemedyPotency || '30C'
+  );
+  const [showCompanionFields, setShowCompanionFields] = useState(
+    isVetPatient ||
+      Boolean(prefill?.firstRemedyCompanion) ||
+      Boolean(prefill?.secondRemedyCompanion)
+  );
+
+  // Notebook Dispensing Columns: ৩০/৪০ বড়ি | আউন্স | ফাইল | শক্তি | বায়োকেমিক
+  const [globulesDose, setGlobulesDose] = useState(prefill?.globulesDose || '');
+  const [ounceAmount, setOunceAmount] = useState(prefill?.ounceAmount || '');
+  const [phialCount, setPhialCount] = useState(prefill?.phialCount || '');
+  const [extraPotency, setExtraPotency] = useState(prefill?.extraPotency || '');
+  const [biochemicMedicine, setBiochemicMedicine] = useState(
+    prefill?.biochemicMedicine || ''
+  );
+  const [showDispensingColumns, setShowDispensingColumns] = useState(
+    !isVetPatient ||
+      Boolean(
+        prefill?.globulesDose ||
+          prefill?.ounceAmount ||
+          prefill?.phialCount ||
+          prefill?.extraPotency ||
+          prefill?.biochemicMedicine
+      )
+  );
+
+  const [dosage, setDosage] = useState(
+    prefill?.dosage ||
+      t('Morning & afternoon before meals (5 days)', 'সকাল ও বিকালে খাবারের আগে (৫ দিন)')
+  );
+  const [clinicalNotes, setClinicalNotes] = useState(prefill?.clinicalNotes || '');
   const [nextFollowUpDate, setNextFollowUpDate] = useState('');
+
+  // Disease & Multi-Symptom Matcher inside Consultation modal
+  const [showDiseasePicker, setShowDiseasePicker] = useState(false);
+  const [diseaseEntries, setDiseaseEntries] = useState<DiseaseRemedyEntry[]>([]);
+  const [loadingDiseases, setLoadingDiseases] = useState(false);
+  const [diseasePickerQuery, setDiseasePickerQuery] = useState('');
+  const [assignedSlotsByRuleId, setAssignedSlotsByRuleId] = useState<
+    Record<string, RemedyRuleTiming>
+  >({});
 
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<PhotoCategory>('symptom');
@@ -74,6 +181,211 @@ export function ConsultationFormModal({
   const [feeNotes, setFeeNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Preload clinic's disease database on modal open so symptom lookup is instant
+  useEffect(() => {
+    const uid = auth.currentUser?.uid;
+    if (!uid) return;
+
+    let cancelled = false;
+    setLoadingDiseases(true);
+    const source = isSuperAdmin
+      ? tenantDiseaseRemediesCol(clinic.id)
+      : query(
+          tenantDiseaseRemediesCol(clinic.id),
+          where('clinicAccessUids', 'array-contains', uid)
+        );
+
+    getDocs(source)
+      .then((snap) => {
+        if (cancelled) return;
+        const rows = snap.docs
+          .map((d) => ({
+            id: d.id,
+            ...(d.data() as Omit<DiseaseRemedyEntry, 'id'>),
+          }))
+          .filter((item) => !item.isDeleted)
+          .sort((a, b) => a.diseaseName.localeCompare(b.diseaseName));
+        setDiseaseEntries(rows);
+      })
+      .catch(() => {
+        // Ignore transient picker fetch error
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingDiseases(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clinic.id, isSuperAdmin]);
+
+  const scopeCompatibleEntries = useMemo(() => {
+    return diseaseEntries.filter((item) => {
+      if (isVetPatient && item.patientScope === 'Human') return false;
+      if (!isVetPatient && patient.patientType === 'Human' && item.patientScope === 'Veterinary') {
+        return false;
+      }
+      return true;
+    });
+  }, [diseaseEntries, isVetPatient, patient.patientType]);
+
+  const filteredDiseaseEntries = useMemo(() => {
+    const q = diseasePickerQuery.trim().toLowerCase();
+    return scopeCompatibleEntries.filter((item) => {
+      if (!q) return true;
+      const ruleMatch = (item.symptomRules || []).some(
+        (rule) =>
+          rule.symptom.toLowerCase().includes(q) ||
+          rule.remedyName.toLowerCase().includes(q) ||
+          rule.potency.toLowerCase().includes(q) ||
+          (rule.doseOrUnit || '').toLowerCase().includes(q) ||
+          (rule.notes || '').toLowerCase().includes(q)
+      );
+      return (
+        ruleMatch ||
+        item.diseaseName.toLowerCase().includes(q) ||
+        item.symptoms.toLowerCase().includes(q) ||
+        item.firstRemedyMorning.toLowerCase().includes(q) ||
+        (item.secondRemedyAfternoon || '').toLowerCase().includes(q)
+      );
+    });
+  }, [diseasePickerQuery, scopeCompatibleEntries]);
+
+  // Direct flat symptom matches when practitioner types what the patient says
+  const matchingSymptomRules = useMemo<FlatSymptomMatch[]>(() => {
+    const q = diseasePickerQuery.trim().toLowerCase();
+    if (!q) return [];
+    const results: FlatSymptomMatch[] = [];
+    for (const entry of scopeCompatibleEntries) {
+      if (entry.symptomRules && entry.symptomRules.length > 0) {
+        for (const rule of entry.symptomRules) {
+          const hit =
+            rule.symptom.toLowerCase().includes(q) ||
+            rule.remedyName.toLowerCase().includes(q) ||
+            rule.potency.toLowerCase().includes(q) ||
+            (rule.doseOrUnit || '').toLowerCase().includes(q) ||
+            (rule.notes || '').toLowerCase().includes(q) ||
+            entry.diseaseName.toLowerCase().includes(q);
+          if (hit) {
+            results.push({ entry, rule });
+          }
+        }
+      }
+    }
+    return results.slice(0, 20);
+  }, [diseasePickerQuery, scopeCompatibleEntries]);
+
+  const applyUnitHint = (unitText?: string) => {
+    const u = (unitText || '').trim();
+    if (!u) return;
+    const lower = u.toLowerCase();
+    if (lower.includes('বড়ি') || lower.includes('বড়ি') || lower.includes('glob') || lower.includes('pill')) {
+      setGlobulesDose(u);
+      setShowDispensingColumns(true);
+    } else if (lower.includes('আউন্স') || lower.includes('oz') || lower.includes('ounce')) {
+      setOunceAmount(u);
+      setShowDispensingColumns(true);
+    } else if (lower.includes('ফাইল') || lower.includes('phial')) {
+      setPhialCount(u);
+      setShowDispensingColumns(true);
+    }
+  };
+
+  const applySingleSymptomRule = (
+    entry: DiseaseRemedyEntry,
+    rule: DiseaseSymptomRule,
+    explicitSlot?: RemedyRuleTiming
+  ) => {
+    const resolvedSlot: RemedyRuleTiming =
+      explicitSlot ??
+      (rule.timing === 'general'
+        ? !firstRemedyMorning.trim()
+          ? 'morning'
+          : !secondRemedyAfternoon.trim()
+            ? 'afternoon'
+            : 'morning'
+        : rule.timing);
+
+    setAssignedSlotsByRuleId((prev) => ({
+      ...prev,
+      [rule.id]: resolvedSlot,
+    }));
+
+    setDiseaseName((prev) => {
+      if (!prev.trim()) return entry.diseaseName;
+      if (prev.toLowerCase().includes(entry.diseaseName.toLowerCase())) return prev;
+      return `${prev.trim()}, ${entry.diseaseName}`.slice(0, FIELD_LIMITS.diseaseNameMax);
+    });
+
+    const symptomLine = `[${entry.diseaseName}] ${rule.symptom}`;
+    setPresentingSymptoms((prev) => {
+      if (prev.includes(symptomLine)) return prev;
+      return prev.trim() ? `${prev.trim()}\n${symptomLine}` : symptomLine;
+    });
+
+    if (resolvedSlot === 'morning') {
+      setFirstRemedyMorning(rule.remedyName);
+      setFirstRemedyPotency(rule.potency || '30C');
+    } else if (resolvedSlot === 'afternoon') {
+      setSecondRemedyAfternoon(rule.remedyName);
+      setSecondRemedyPotency(rule.potency || '30C');
+    } else if (resolvedSlot === 'companion-morning') {
+      setFirstRemedyCompanion(rule.remedyName);
+      setShowCompanionFields(true);
+      if (!firstRemedyPotency.trim() && rule.potency) {
+        setFirstRemedyPotency(rule.potency);
+      }
+    } else if (resolvedSlot === 'companion-afternoon') {
+      setSecondRemedyCompanion(rule.remedyName);
+      setShowCompanionFields(true);
+      if (!secondRemedyPotency.trim() && rule.potency) {
+        setSecondRemedyPotency(rule.potency);
+      }
+    } else if (resolvedSlot === 'biochemic') {
+      setBiochemicMedicine(`${rule.remedyName}${rule.potency ? ` ${rule.potency}` : ''}`.trim());
+      setShowDispensingColumns(true);
+    }
+
+    applyUnitHint(rule.doseOrUnit);
+
+    if (rule.notes?.trim()) {
+      setClinicalNotes((prev) => {
+        if (prev.includes(rule.notes!.trim())) return prev;
+        return prev.trim() ? `${prev.trim()}\n${rule.notes!.trim()}` : rule.notes!.trim();
+      });
+    }
+  };
+
+  const applyDiseaseEntry = (entry: DiseaseRemedyEntry) => {
+    setDiseaseName(entry.diseaseName);
+    if (entry.symptomRules && entry.symptomRules.length > 0) {
+      entry.symptomRules.forEach((rule) => applySingleSymptomRule(entry, rule));
+    } else {
+      setPresentingSymptoms((prev) =>
+        prev.trim()
+          ? `${prev.trim()}\n[${entry.diseaseName}] ${entry.symptoms}`
+          : `[${entry.diseaseName}] ${entry.symptoms}`
+      );
+      setFirstRemedyMorning(entry.firstRemedyMorning);
+      setFirstRemedyPotency(entry.firstRemedyPotency || '200C');
+      setSecondRemedyAfternoon(entry.secondRemedyAfternoon || '');
+      setSecondRemedyPotency(entry.secondRemedyPotency || '30C');
+    }
+    if (entry.dosageInstructions?.trim()) {
+      setDosage(entry.dosageInstructions.trim());
+    }
+    if (entry.clinicalNotes?.trim()) {
+      setClinicalNotes((prev) =>
+        prev.includes(entry.clinicalNotes!.trim())
+          ? prev
+          : prev.trim()
+            ? `${prev.trim()}\n${entry.clinicalNotes}`
+            : entry.clinicalNotes || ''
+      );
+    }
+    setShowDiseasePicker(false);
+  };
 
   const feeBreakdown = useMemo(
     () => computeFeeBreakdown(feeInput, discountInput, cashPaidInput),
@@ -142,11 +454,18 @@ export function ConsultationFormModal({
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!presentingSymptoms.trim() || !remedyName.trim() || !dosage.trim()) {
+    const morningRem = firstRemedyMorning.trim();
+    const morningComp = firstRemedyCompanion.trim();
+    const morningPot = firstRemedyPotency.trim() || '30C';
+    const afternoonRem = secondRemedyAfternoon.trim();
+    const afternoonComp = secondRemedyCompanion.trim();
+    const afternoonPot = secondRemedyPotency.trim() || '30C';
+
+    if (!presentingSymptoms.trim() || !morningRem || !dosage.trim()) {
       setErrorMsg(
         t(
-          'Presenting symptoms, remedy name, and dosage are required.',
-          'বর্তমান লক্ষণ, ওষুধের নাম এবং মাত্রা আবশ্যক।'
+          'Presenting symptoms, 1st Morning Remedy, and dosage are required.',
+          'বর্তমান লক্ষণ, ১ম ঔষধ (সকালে) এবং মাত্রা আবশ্যক।'
         )
       );
       return;
@@ -185,6 +504,25 @@ export function ConsultationFormModal({
       return;
     }
 
+    const morningJoined = morningComp ? `${morningRem} + ${morningComp}` : morningRem;
+    const afternoonJoined = afternoonRem
+      ? afternoonComp
+        ? `${afternoonRem} + ${afternoonComp}`
+        : afternoonRem
+      : afternoonComp;
+
+    const summaryRemedyName = (
+      afternoonJoined ? `${morningJoined} | ${afternoonJoined}` : morningJoined
+    ).slice(0, FIELD_LIMITS.remedyNameMax);
+    const summaryPotency = (
+      afternoonJoined ? `${morningPot} / ${afternoonPot}` : morningPot
+    ).slice(0, FIELD_LIMITS.potencyMax);
+    const summaryLastRemedy = (
+      afternoonJoined
+        ? `${morningJoined} (${morningPot}) · ${afternoonJoined} (${afternoonPot})`
+        : `${morningJoined} ${morningPot}`
+    ).slice(0, FIELD_LIMITS.remedyNameMax);
+
     setSubmitting(true);
     const consultationId = `con_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
     const path = `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`;
@@ -220,14 +558,46 @@ export function ConsultationFormModal({
         patientId: patient.id,
         visitDate: visitDate.slice(0, 32),
         presentingSymptoms: presentingSymptoms.trim().slice(0, FIELD_LIMITS.presentingSymptomsMax),
-        remedyName: remedyName.trim().slice(0, FIELD_LIMITS.remedyNameMax),
-        potency: potency.trim().slice(0, FIELD_LIMITS.potencyMax),
+        firstRemedyMorning: morningRem.slice(0, FIELD_LIMITS.remedyNameMax),
+        firstRemedyPotency: morningPot.slice(0, FIELD_LIMITS.potencyMax),
+        remedyName: summaryRemedyName,
+        potency: summaryPotency,
         dosage: dosage.trim().slice(0, FIELD_LIMITS.dosageMax),
         createdBy: uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
+      if (diseaseName.trim()) {
+        payload.diseaseName = diseaseName.trim().slice(0, FIELD_LIMITS.diseaseNameMax);
+      }
+      if (morningComp) {
+        payload.firstRemedyCompanion = morningComp.slice(0, FIELD_LIMITS.remedyNameMax);
+      }
+      if (afternoonRem) {
+        payload.secondRemedyAfternoon = afternoonRem.slice(0, FIELD_LIMITS.remedyNameMax);
+        payload.secondRemedyPotency = afternoonPot.slice(0, FIELD_LIMITS.potencyMax);
+      } else if (afternoonComp) {
+        payload.secondRemedyPotency = afternoonPot.slice(0, FIELD_LIMITS.potencyMax);
+      }
+      if (afternoonComp) {
+        payload.secondRemedyCompanion = afternoonComp.slice(0, FIELD_LIMITS.remedyNameMax);
+      }
+      if (globulesDose.trim()) {
+        payload.globulesDose = globulesDose.trim().slice(0, FIELD_LIMITS.dispensingUnitMax);
+      }
+      if (ounceAmount.trim()) {
+        payload.ounceAmount = ounceAmount.trim().slice(0, FIELD_LIMITS.dispensingUnitMax);
+      }
+      if (phialCount.trim()) {
+        payload.phialCount = phialCount.trim().slice(0, FIELD_LIMITS.dispensingUnitMax);
+      }
+      if (extraPotency.trim()) {
+        payload.extraPotency = extraPotency.trim().slice(0, FIELD_LIMITS.potencyMax);
+      }
+      if (biochemicMedicine.trim()) {
+        payload.biochemicMedicine = biochemicMedicine.trim().slice(0, FIELD_LIMITS.remedyNameMax);
+      }
       if (mentalGenerals.trim()) {
         payload.mentalGenerals = mentalGenerals.trim().slice(0, FIELD_LIMITS.generalsMax);
       }
@@ -255,7 +625,7 @@ export function ConsultationFormModal({
       const patientUpdate: Record<string, unknown> = {
         status: nextFollowUpDate ? 'follow-up' : 'active',
         lastVisitDate: visitDate,
-        lastRemedy: `${remedyName.trim()} ${potency.trim()}`.slice(0, 160),
+        lastRemedy: summaryLastRemedy,
         updatedAt: serverTimestamp(),
       };
       if (nextFollowUpDate.trim()) {
@@ -268,9 +638,10 @@ export function ConsultationFormModal({
 
       if (feeBreakdown.feeAmount > 0) {
         const feeId = `fee_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-        const resolvedNote = (
-          feeNotes.trim() || `${remedyName.trim()} ${potency.trim()}`
-        ).slice(0, FIELD_LIMITS.feeNotesMax);
+        const resolvedNote = (feeNotes.trim() || summaryLastRemedy).slice(
+          0,
+          FIELD_LIMITS.feeNotesMax
+        );
         const feePayload: Record<string, unknown> = {
           clinicId: clinic.id,
           clinicAccessEmails: clinic.accessEmails,
@@ -313,31 +684,310 @@ export function ConsultationFormModal({
 
   return (
     <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4 overflow-y-auto">
-      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-3xl my-8 overflow-hidden">
-        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div>
+      <div className="bg-white border border-slate-200 rounded-xl w-full max-w-4xl my-8 overflow-hidden">
+        <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
+          <div className="min-w-0">
             <h2 className="font-display text-lg font-semibold text-slate-900">
-              {t('Log Homeopathic Consultation', 'হোমিওপ্যাথিক কনসাল্টেশন লিপিবদ্ধ করুন')}
+              {t('Log Homeopathic Consultation', 'ভিজিট ও ঔষধ লিপিবদ্ধ করুন')}
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {patient.fullName} · <span className="font-mono">{patient.caseNumber}</span>
+            <p className="text-xs text-slate-500 mt-0.5 truncate">
+              {patient.fullName}
+              {patient.patientType && patient.patientType !== 'Human'
+                ? ` (${patientTypeLabels[patient.patientType]})`
+                : ''}{' '}
+              · <span className="font-mono">{patient.caseNumber}</span>
+              {diseaseName ? ` · ${diseaseName}` : ''}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('Close modal', 'মোডাল বন্ধ করুন')}
-            className="p-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-          >
-            <X className="w-4 h-4" />
-          </button>
+
+          <div className="flex items-center gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => setShowDiseasePicker((prev) => !prev)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer whitespace-nowrap ${
+                showDiseasePicker
+                  ? palette.softPanel
+                  : 'bg-teal-50/70 border-teal-300 text-teal-900 hover:bg-teal-100/70'
+              }`}
+            >
+              <BookMarked className="w-3.5 h-3.5" />
+              {t('Symptom & Disease Matcher', 'রোগ ও লক্ষণ অনুযায়ী নির্বাচন')}
+            </button>
+
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={t('Close modal', 'মোডাল বন্ধ করুন')}
+              className="p-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[80vh] overflow-y-auto">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <form onSubmit={handleSubmit} className="p-6 space-y-5 max-h-[82vh] overflow-y-auto">
+          {/* Interactive Disease & Spoken-Symptom Matcher */}
+          {showDiseasePicker && (
+            <div className="bg-slate-50 border border-teal-200 rounded-xl p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-semibold text-slate-900 flex items-center gap-1.5">
+                    <Sparkles className="w-3.5 h-3.5 text-teal-700" />
+                    <span>
+                      {t(
+                        'Search Spoken Patient Symptoms or Disease Name',
+                        'রোগীর বলা লক্ষণ বা রোগের নাম লিখে ঔষধ নির্বাচন করুন'
+                      )}
+                    </span>
+                  </p>
+                  <p className="text-[11px] text-slate-500 mt-0.5">
+                    {t(
+                      'Match patient symptoms and choose whether each selected remedy is taken Morning (1st), Afternoon (2nd), Companion, or Biochemic.',
+                      'রোগীর লক্ষণ অনুযায়ী ঔষধ খুঁজে এখানে থেকেই ঠিক করুন কোনটি সকালে (১ম) আর কোনটি বিকালে (২য়) খাবে।'
+                    )}
+                  </p>
+                </div>
+                <div className="relative w-full sm:w-72">
+                  <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="search"
+                    autoFocus
+                    value={diseasePickerQuery}
+                    onChange={(e) => setDiseasePickerQuery(e.target.value)}
+                    placeholder={t(
+                      'Type symptom, disease, remedy...',
+                      'যেমন: পেটব্যথা, ঝুঁকলে কমে, Colocynth...'
+                    )}
+                    className="w-full pl-8 pr-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                  />
+                </div>
+              </div>
+
+              {loadingDiseases ? (
+                <p className="text-xs text-slate-500 py-2">
+                  {t('Loading clinic disease database...', 'রোগ ও ঔষধ ডেটাবেস লোড হচ্ছে...')}
+                </p>
+              ) : filteredDiseaseEntries.length === 0 ? (
+                <p className="text-xs text-slate-500 py-2">
+                  {t(
+                    'No matching disease guides found. Add rules in Disease & Remedies Database.',
+                    'মিল থাকা কোনো রোগ-লক্ষণ গাইড পাওয়া যায়নি। রোগ ও ঔষধ ডেটাবেস মেনু থেকে যোগ করুন।'
+                  )}
+                </p>
+              ) : (
+                <div className="space-y-3">
+                  {/* Direct Matched Symptom Rules when searching */}
+                  {matchingSymptomRules.length > 0 && (
+                    <div className="space-y-1.5">
+                      <p className="text-[11px] font-semibold text-teal-900">
+                        {t('Matching Symptom-to-Remedy Rules', 'লক্ষণ অনুযায়ী সরাসরি ঔষধের মিল')} (
+                        {matchingSymptomRules.length})
+                      </p>
+                      <div className="max-h-52 overflow-y-auto divide-y divide-slate-200 bg-white border border-teal-200 rounded-lg">
+                        {matchingSymptomRules.map(({ entry, rule }) => {
+                          const assignedSlot = assignedSlotsByRuleId[rule.id];
+                          return (
+                            <div
+                              key={`${entry.id}-${rule.id}`}
+                              className={`px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 ${
+                                assignedSlot ? 'bg-teal-50/60' : ''
+                              }`}
+                            >
+                              <div className="min-w-0">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span className="text-[11px] font-semibold text-slate-900">
+                                    {entry.diseaseName}
+                                  </span>
+                                  {assignedSlot && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] font-semibold px-1.5 py-0.5 rounded bg-teal-700 text-white">
+                                      <Check className="w-2.5 h-2.5" />
+                                      {timingLabels[assignedSlot]}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-slate-700 mt-0.5">{rule.symptom}</p>
+                                {rule.notes && (
+                                  <p className="text-[11px] text-slate-500 mt-0.5">{rule.notes}</p>
+                                )}
+                                <p className="text-[11px] text-teal-800 font-medium mt-0.5">
+                                  {rule.remedyName}{' '}
+                                  <span className="font-mono">{rule.potency}</span>
+                                  {rule.doseOrUnit ? ` · ${rule.doseOrUnit}` : ''}
+                                </p>
+                              </div>
+
+                              <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => applySingleSymptomRule(entry, rule, 'morning')}
+                                  className={`px-2 py-1 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                                    assignedSlot === 'morning'
+                                      ? 'bg-teal-700 text-white border-teal-700'
+                                      : 'bg-amber-50 text-amber-900 border-amber-200 hover:bg-amber-100'
+                                  }`}
+                                >
+                                  {t('+ 1st Morning', '+ ১ম সকালে')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => applySingleSymptomRule(entry, rule, 'afternoon')}
+                                  className={`px-2 py-1 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                                    assignedSlot === 'afternoon'
+                                      ? 'bg-teal-700 text-white border-teal-700'
+                                      : 'bg-slate-100 text-slate-800 border-slate-300 hover:bg-slate-200'
+                                  }`}
+                                >
+                                  {t('+ 2nd Afternoon', '+ ২য় বিকালে')}
+                                </button>
+                                {(showCompanionFields || isVetPatient) && (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      applySingleSymptomRule(entry, rule, 'companion-morning')
+                                    }
+                                    className={`px-2 py-1 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                                      assignedSlot === 'companion-morning'
+                                        ? 'bg-teal-700 text-white border-teal-700'
+                                        : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                                    }`}
+                                  >
+                                    {t('+ Companion', '+ সহায়ক')}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => applySingleSymptomRule(entry, rule, 'biochemic')}
+                                  className={`px-2 py-1 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap transition-colors ${
+                                    assignedSlot === 'biochemic'
+                                      ? 'bg-teal-700 text-white border-teal-700'
+                                      : 'bg-sky-50 text-sky-900 border-sky-200 hover:bg-sky-100'
+                                  }`}
+                                >
+                                  {t('+ Biochemic', '+ বায়োকেমিক')}
+                                </button>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Disease Cards with Selectable Symptom Rules */}
+                  <div className="max-h-64 overflow-y-auto divide-y divide-slate-200 bg-white border border-slate-200 rounded-lg">
+                    {filteredDiseaseEntries.map((item) => (
+                      <div key={item.id} className="p-3 space-y-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="text-xs font-semibold text-slate-900">
+                              {item.diseaseName}
+                            </span>
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-600">
+                              {scopeLabels[item.patientScope]}
+                            </span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => applyDiseaseEntry(item)}
+                            className="px-2.5 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded-md hover:bg-teal-100 cursor-pointer whitespace-nowrap"
+                          >
+                            {t('Apply Full Disease', 'সম্পূর্ণ প্রোটোকল নিন')}
+                          </button>
+                        </div>
+
+                        {item.symptomRules && item.symptomRules.length > 0 ? (
+                          <div className="space-y-1.5">
+                            {item.symptomRules.map((rule) => {
+                              const assignedSlot = assignedSlotsByRuleId[rule.id];
+                              return (
+                                <div
+                                  key={rule.id}
+                                  className={`px-2.5 py-2 rounded-md border text-[11px] flex flex-col sm:flex-row sm:items-center justify-between gap-2 transition-colors ${
+                                    assignedSlot
+                                      ? 'bg-teal-50/70 border-teal-300 text-teal-950'
+                                      : 'bg-slate-50/70 border-slate-200 text-slate-700'
+                                  }`}
+                                >
+                                  <div className="min-w-0 flex-1 space-y-0.5">
+                                    <div>
+                                      <span className="font-medium text-slate-900">
+                                        {rule.symptom}
+                                      </span>{' '}
+                                      →{' '}
+                                      <span className="font-semibold text-teal-800">
+                                        {rule.remedyName}
+                                      </span>{' '}
+                                      <span className="font-mono">{rule.potency}</span>
+                                      {rule.doseOrUnit ? ` (${rule.doseOrUnit})` : ''}
+                                    </div>
+                                    {rule.notes && (
+                                      <p className="text-[10px] text-slate-500">{rule.notes}</p>
+                                    )}
+                                  </div>
+
+                                  <div className="flex flex-wrap items-center gap-1 shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => applySingleSymptomRule(item, rule, 'morning')}
+                                      className={`px-2 py-0.5 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap ${
+                                        assignedSlot === 'morning'
+                                          ? 'bg-teal-700 text-white border-teal-700'
+                                          : 'bg-white text-amber-900 border-amber-300 hover:bg-amber-50'
+                                      }`}
+                                    >
+                                      {t('Morning', 'সকালে')}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => applySingleSymptomRule(item, rule, 'afternoon')}
+                                      className={`px-2 py-0.5 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap ${
+                                        assignedSlot === 'afternoon'
+                                          ? 'bg-teal-700 text-white border-teal-700'
+                                          : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-100'
+                                      }`}
+                                    >
+                                      {t('Afternoon', 'বিকালে')}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => applySingleSymptomRule(item, rule, 'biochemic')}
+                                      className={`px-2 py-0.5 text-[10px] font-medium rounded border cursor-pointer whitespace-nowrap ${
+                                        assignedSlot === 'biochemic'
+                                          ? 'bg-teal-700 text-white border-teal-700'
+                                          : 'bg-white text-sky-900 border-sky-300 hover:bg-sky-50'
+                                      }`}
+                                    >
+                                      {t('Biochemic', 'বায়োকেমিক')}
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-600">
+                            {item.symptoms} —{' '}
+                            <span className="font-medium text-teal-800">
+                              {item.firstRemedyMorning} ({item.firstRemedyPotency})
+                              {item.secondRemedyAfternoon
+                                ? ` + ${item.secondRemedyAfternoon} (${item.secondRemedyPotency || '30C'})`
+                                : ''}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Visit Date, Disease Tag & Next Follow-up */}
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                {t('Visit Date *', 'ভিজিটের তারিখ *')}
+                {t('Visit Date (তাং) *', 'ভিজিটের তারিখ (তাং) *')}
               </label>
               <input
                 type="date"
@@ -345,6 +995,20 @@ export function ConsultationFormModal({
                 value={visitDate}
                 onChange={(e) => setVisitDate(e.target.value)}
                 className="w-full px-3 py-2 text-sm tabular-nums border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                {t('Diagnosed Disease (Optional)', 'রোগের নাম (ঐচ্ছিক)')}
+              </label>
+              <input
+                type="text"
+                maxLength={FIELD_LIMITS.diseaseNameMax}
+                value={diseaseName}
+                onChange={(e) => setDiseaseName(e.target.value)}
+                placeholder={t('e.g. Cough, Fever, Mastitis', 'যেমন: কাশি, জ্বর, ওলান ফোলা')}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
               />
             </div>
 
@@ -425,7 +1089,10 @@ export function ConsultationFormModal({
                 maxLength={FIELD_LIMITS.modalitiesMax}
                 value={modalitiesWorse}
                 onChange={(e) => setModalitiesWorse(e.target.value)}
-                placeholder={t('e.g. Cold air, midnight, motion', 'যেমন: ঠান্ডা বাতাস, মধ্যরাত, নড়াচড়ায়')}
+                placeholder={t(
+                  'e.g. Cold air, midnight, motion',
+                  'যেমন: ঠান্ডা বাতাস, মধ্যরাত, নড়াচড়ায়'
+                )}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
               />
             </div>
@@ -439,69 +1106,305 @@ export function ConsultationFormModal({
                 maxLength={FIELD_LIMITS.modalitiesMax}
                 value={modalitiesBetter}
                 onChange={(e) => setModalitiesBetter(e.target.value)}
-                placeholder={t('e.g. Warm drinks, open air, pressure', 'যেমন: গরম পানীয়, খোলা বাতাস, চাপে')}
+                placeholder={t(
+                  'e.g. Warm drinks, open air, pressure',
+                  'যেমন: গরম পানীয়, খোলা বাতাস, চাপে'
+                )}
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
               />
             </div>
           </div>
 
-          <div className="border-t border-slate-200 pt-5">
-            <h3 className="text-xs font-semibold text-slate-800 mb-3">
-              {t('Prescription & Remedy Selection', 'প্রেসক্রিপশন ও ওষুধ নির্বাচন')}
-            </h3>
-            <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
-              <div className="sm:col-span-5">
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('Remedy Name *', 'ওষুধের নাম *')}
+          {/* Morning (1st) & Afternoon (2nd) Prescription Fields + Companion Veterinary Slots */}
+          <div className="border-t border-slate-200 pt-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-semibold text-slate-800">
+                {t(
+                  'Morning & Afternoon Remedy Prescription',
+                  '১ম ও ২য় ঔষধ, শক্তি এবং মাত্রা নির্ধারণ'
+                )}
+              </h3>
+              <div className="flex flex-wrap items-center gap-2">
+                {!isVetPatient && (
+                  <button
+                    type="button"
+                    onClick={() => setShowCompanionFields((prev) => !prev)}
+                    className="text-[11px] font-medium text-slate-600 hover:text-teal-800 underline cursor-pointer"
+                  >
+                    {showCompanionFields
+                      ? t('Hide companion medicine slots', 'সহায়ক ঔষধ স্লট লুকান')
+                      : t('Add companion medicine slots', '+ সহায়ক ঔষধ যোগ করুন')}
+                  </button>
+                )}
+                {isVetPatient && (
+                  <button
+                    type="button"
+                    onClick={() => setShowDispensingColumns((prev) => !prev)}
+                    className="text-[11px] font-medium text-slate-600 hover:text-teal-800 underline cursor-pointer"
+                  >
+                    {showDispensingColumns
+                      ? t('Hide globules/oz/phial fields', 'বড়ি/আউন্স/ফাইল লুকান')
+                      : t('Show globules/oz/phial fields', '+ বড়ি/আউন্স/ফাইল/বায়োকেমিক')}
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <datalist id="homeopathy-remedies">
+              {COMMON_REMEDIES.map((rem) => (
+                <option key={rem} value={rem} />
+              ))}
+            </datalist>
+            <datalist id="homeopathy-potencies">
+              {POTENCY_OPTIONS.map((pot) => (
+                <option key={pot} value={pot} />
+              ))}
+            </datalist>
+
+            {/* 1st Remedy (Morning) Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-amber-50/40 border border-amber-200/70 rounded-lg p-3.5">
+              <div className={showCompanionFields ? 'sm:col-span-5' : 'sm:col-span-8'}>
+                <label className="block text-xs font-medium text-slate-800 mb-1.5">
+                  {t('1st Remedy (Morning) *', '১ম ঔষধ (সকালে) *')}
                 </label>
                 <input
                   type="text"
                   required
                   list="homeopathy-remedies"
                   maxLength={FIELD_LIMITS.remedyNameMax}
-                  value={remedyName}
-                  onChange={(e) => setRemedyName(e.target.value)}
-                  placeholder="e.g. Arsenicum album"
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                  value={firstRemedyMorning}
+                  onChange={(e) => setFirstRemedyMorning(e.target.value)}
+                  placeholder={t('e.g. Arsenicum album / AN-IV.', 'যেমন: Arsenicum album / AN-IV.')}
+                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                 />
-                <datalist id="homeopathy-remedies">
-                  {COMMON_REMEDIES.map((rem) => (
-                    <option key={rem} value={rem} />
-                  ))}
-                </datalist>
               </div>
 
-              <div className="sm:col-span-3">
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('Potency *', 'পোটেন্সি (শক্তি) *')}
-                </label>
-                <select
-                  value={potency}
-                  onChange={(e) => setPotency(e.target.value)}
-                  className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                >
-                  {POTENCY_OPTIONS.map((pot) => (
-                    <option key={pot} value={pot}>
-                      {pot}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {showCompanionFields && (
+                <div className="sm:col-span-4">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                    {t('1st Remedy (Companion)', '১ম ঔষধ (সহায়ক)')}
+                  </label>
+                  <input
+                    type="text"
+                    list="homeopathy-remedies"
+                    maxLength={FIELD_LIMITS.remedyNameMax}
+                    value={firstRemedyCompanion}
+                    onChange={(e) => setFirstRemedyCompanion(e.target.value)}
+                    placeholder={t('e.g. 2C (-)', 'যেমন: 2C (-)')}
+                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                  />
+                </div>
+              )}
 
-              <div className="sm:col-span-4">
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('Dosage & Repetition *', 'মাত্রা ও পুনরাবৃত্তি *')}
+              <div className={showCompanionFields ? 'sm:col-span-3' : 'sm:col-span-4'}>
+                <label className="block text-xs font-medium text-slate-800 mb-1.5">
+                  {t('Potency (শক্তি) *', 'শক্তি (১ম) *')}
                 </label>
                 <input
                   type="text"
                   required
-                  maxLength={FIELD_LIMITS.dosageMax}
-                  value={dosage}
-                  onChange={(e) => setDosage(e.target.value)}
-                  placeholder={t('3 globules BID x 7 days', '৩টি গ্লোবিউলস দিনে ২ বার ৭ দিন')}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                  list="homeopathy-potencies"
+                  maxLength={FIELD_LIMITS.potencyMax}
+                  value={firstRemedyPotency}
+                  onChange={(e) => setFirstRemedyPotency(e.target.value)}
+                  placeholder="200C / Phyto"
+                  className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                 />
               </div>
+            </div>
+
+            {/* 2nd Remedy (Afternoon) Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 bg-slate-50 border border-slate-200 rounded-lg p-3.5">
+              <div className={showCompanionFields ? 'sm:col-span-5' : 'sm:col-span-8'}>
+                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                  {t('2nd Remedy (Afternoon — Optional)', '২য় ঔষধ (বিকালে — ঐচ্ছিক)')}
+                </label>
+                <input
+                  type="text"
+                  list="homeopathy-remedies"
+                  maxLength={FIELD_LIMITS.remedyNameMax}
+                  value={secondRemedyAfternoon}
+                  onChange={(e) => setSecondRemedyAfternoon(e.target.value)}
+                  placeholder={t(
+                    'e.g. Nux vomica (leave empty if single remedy)',
+                    'যেমন: Nux vomica (না থাকলে খালি রাখুন)'
+                  )}
+                  className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+
+              {showCompanionFields && (
+                <div className="sm:col-span-4">
+                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                    {t('2nd Remedy (Companion)', '২য় ঔষধ (সহায়ক)')}
+                  </label>
+                  <input
+                    type="text"
+                    list="homeopathy-remedies"
+                    maxLength={FIELD_LIMITS.remedyNameMax}
+                    value={secondRemedyCompanion}
+                    onChange={(e) => setSecondRemedyCompanion(e.target.value)}
+                    placeholder={t('Optional 2nd companion', 'ঐচ্ছিক সহায়ক ঔষধ')}
+                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                  />
+                </div>
+              )}
+
+              <div className={showCompanionFields ? 'sm:col-span-3' : 'sm:col-span-4'}>
+                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                  {t('Potency (শক্তি ২য়)', 'শক্তি (২য়)')}
+                </label>
+                <input
+                  type="text"
+                  list="homeopathy-potencies"
+                  maxLength={FIELD_LIMITS.potencyMax}
+                  value={secondRemedyPotency}
+                  onChange={(e) => setSecondRemedyPotency(e.target.value)}
+                  placeholder="30C"
+                  className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+            </div>
+
+            {/* Notebook Dispensing Columns: ৩০/৪০ বড়ি | আউন্স | ফাইল | শক্তি | বায়োকেমিক */}
+            {showDispensingColumns && (
+              <div className="bg-teal-50/30 border border-teal-200/80 rounded-lg p-3.5 space-y-3">
+                <p className="text-[11px] font-semibold text-teal-950">
+                  {t(
+                    'Dispensing Format & Biochemic Details (৩০/৪০ বড়ি · আউন্স · ফাইল · শক্তি · বায়োকেমিক)',
+                    'বড়ি, আউন্স, ফাইল, শক্তি ও বায়োকেমিক তথ্য'
+                  )}
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-medium text-slate-700">
+                        {t('30/40 Globules', '৩০/৪০ বড়ি')}
+                      </label>
+                      <div className="flex items-center gap-1">
+                        {['৩০ বড়ি', '৪০ বড়ি'].map((preset) => (
+                          <button
+                            key={preset}
+                            type="button"
+                            onClick={() => setGlobulesDose(preset)}
+                            className={`px-1.5 py-0.5 text-[10px] rounded border cursor-pointer ${
+                              globulesDose === preset
+                                ? 'bg-teal-700 text-white border-teal-700'
+                                : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'
+                            }`}
+                          >
+                            {preset.replace(' বড়ি', '')}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <input
+                      type="text"
+                      list="dispensing-globules-list"
+                      maxLength={FIELD_LIMITS.dispensingUnitMax}
+                      value={globulesDose}
+                      onChange={(e) => setGlobulesDose(e.target.value)}
+                      placeholder={t('30 / 40 বড়ি', 'যেমন: ৩০ বড়ি')}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      {t('Ounce (আউন্স)', 'আউন্স')}
+                    </label>
+                    <input
+                      type="text"
+                      list="dispensing-ounces-list"
+                      maxLength={FIELD_LIMITS.dispensingUnitMax}
+                      value={ounceAmount}
+                      onChange={(e) => setOunceAmount(e.target.value)}
+                      placeholder={t('e.g. ৩০ আউন্স / 1 oz', 'যেমন: ৩০ আউন্স')}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      {t('Phial (ফাইল)', 'ফাইল')}
+                    </label>
+                    <input
+                      type="text"
+                      list="dispensing-phials-list"
+                      maxLength={FIELD_LIMITS.dispensingUnitMax}
+                      value={phialCount}
+                      onChange={(e) => setPhialCount(e.target.value)}
+                      placeholder={t('e.g. ১ ফাইল', 'যেমন: ১ ফাইল')}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      {t('Potency (শক্তি)', 'শক্তি (ফাইল/অতিরিক্ত)')}
+                    </label>
+                    <input
+                      type="text"
+                      list="homeopathy-potencies"
+                      maxLength={FIELD_LIMITS.potencyMax}
+                      value={extraPotency}
+                      onChange={(e) => setExtraPotency(e.target.value)}
+                      placeholder="30C / 6X"
+                      className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                      {t('Biochemic (বায়োকেমিক)', 'বায়োকেমিক')}
+                    </label>
+                    <input
+                      type="text"
+                      list="homeopathy-remedies"
+                      maxLength={FIELD_LIMITS.remedyNameMax}
+                      value={biochemicMedicine}
+                      onChange={(e) => setBiochemicMedicine(e.target.value)}
+                      placeholder={t('e.g. Calc phos 6X', 'যেমন: Calc phos 6X')}
+                      className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                    />
+                  </div>
+                </div>
+
+                <datalist id="dispensing-globules-list">
+                  {CLINICAL_DISPENSING_PRESETS.globules.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+                <datalist id="dispensing-ounces-list">
+                  {CLINICAL_DISPENSING_PRESETS.ounces.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+                <datalist id="dispensing-phials-list">
+                  {CLINICAL_DISPENSING_PRESETS.phials.map((item) => (
+                    <option key={item} value={item} />
+                  ))}
+                </datalist>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                {t('Dosage & Repetition *', 'মাত্রা ও সেবনবিধি *')}
+              </label>
+              <input
+                type="text"
+                required
+                maxLength={FIELD_LIMITS.dosageMax}
+                value={dosage}
+                onChange={(e) => setDosage(e.target.value)}
+                placeholder={t(
+                  'Morning & afternoon before meals (5 days)',
+                  'সকাল ও বিকালে খাবারের আগে (৫ দিন)'
+                )}
+                className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+              />
             </div>
           </div>
 
@@ -606,15 +1509,15 @@ export function ConsultationFormModal({
             )}
           </div>
 
-          {/* Cash-Only Fee Collection & Calculation */}
+          {/* Cash-Only Fee Collection & Calculation (টাকা) */}
           <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/70 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-1.5">
                 <Calculator className="w-3.5 h-3.5 text-teal-700" />
                 <p className="text-xs font-semibold text-slate-800">
                   {t(
-                    'Consultation Cash Fee (Optional)',
-                    'কনসাল্টেশন নগদ ফি হিসাব (ঐচ্ছিক)'
+                    'Consultation Cash Fee — টাকা (Optional)',
+                    'কনসাল্টেশন নগদ ফি — টাকা (ঐচ্ছিক)'
                   )}
                 </p>
               </div>
