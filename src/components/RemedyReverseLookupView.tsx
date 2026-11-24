@@ -262,6 +262,7 @@ export function RemedyReverseLookupView({
         p.fullName.toLowerCase().includes(q) ||
         p.caseNumber.toLowerCase().includes(q) ||
         p.phone.toLowerCase().includes(q) ||
+        (p.address || '').toLowerCase().includes(q) ||
         (p.ownerOrGuardianName || '').toLowerCase().includes(q) ||
         (p.animalSpeciesOrBreed || '').toLowerCase().includes(q) ||
         (p.patientType || '').toLowerCase().includes(q)
@@ -630,8 +631,8 @@ export function RemedyReverseLookupView({
                   value={patientPickerQuery}
                   onChange={(e) => setPatientPickerQuery(e.target.value)}
                   placeholder={t(
-                    'Search patient name, case #, phone, owner, cow/goat...',
-                    'রোগীর নাম, কেস নং, ফোন, মালিক বা গরু/ছাগল লিখুন...'
+                    'Search patient name, case #, phone, address, cow/goat...',
+                    'রোগীর নাম, কেস নং, ফোন, ঠিকানা, গরু/ছাগল লিখুন...'
                   )}
                   className="w-full pl-9 pr-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                 />
@@ -682,6 +683,7 @@ export function RemedyReverseLookupView({
                           <p className="text-[11px] text-slate-500 truncate mt-0.5 tabular-nums">
                             <span className="font-mono">{pat.caseNumber}</span> · {pat.phone}
                             {pat.ownerOrGuardianName ? ` · ${pat.ownerOrGuardianName}` : ''}
+                            {pat.address ? ` · ${pat.address}` : ''}
                           </p>
                         </div>
                       </div>

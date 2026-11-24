@@ -20,6 +20,7 @@ import {
   FilePlus2,
   FileText,
   Loader2,
+  MapPin,
   Plus,
   Printer,
   Sparkles,
@@ -129,6 +130,8 @@ export function PatientDetailView({
   const [actionError, setActionError] = useState<string | null>(null);
   const [confirmDeletePatient, setConfirmDeletePatient] = useState(false);
   const [deletingPatient, setDeletingPatient] = useState(false);
+  const [confirmDeleteConsultationId, setConfirmDeleteConsultationId] = useState<string | null>(null);
+  const [confirmDeletePhotoId, setConfirmDeletePhotoId] = useState<string | null>(null);
 
   // Clinical Notes composer & edit state
   const [noteDate, setNoteDate] = useState(() => new Date().toISOString().slice(0, 10));
@@ -427,6 +430,7 @@ export function PatientDetailView({
       if (lightboxPhoto?.id === photo.id) {
         setLightboxPhoto(null);
       }
+      setConfirmDeletePhotoId(null);
       onPhotoStorageChanged();
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
@@ -453,6 +457,7 @@ export function PatientDetailView({
         tenantConsultationDoc(clinic.id, patient.id, consultationId),
         buildSoftDeletePayload(uid, true)
       );
+      setConfirmDeleteConsultationId(null);
     } catch (error) {
       handleFirestoreError(
         error,
@@ -928,6 +933,12 @@ export function PatientDetailView({
                   <span className="font-medium text-slate-700">{patient.ownerOrGuardianName}</span>
                 </p>
               )}
+              {patient.address && (
+                <p className="text-xs text-slate-600 mt-1 flex items-center gap-1.5">
+                  <MapPin className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                  <span>{patient.address}</span>
+                </p>
+              )}
               <p className="text-sm text-slate-600 mt-1.5 max-w-2xl leading-relaxed">
                 {patient.chiefComplaint}
               </p>
@@ -1264,14 +1275,36 @@ export function PatientDetailView({
                       {con.dosage && <p className="text-xs text-slate-600">{con.dosage}</p>}
                     </div>
 
-                    <button
-                      type="button"
-                      onClick={() => handleDeleteConsultation(con.id)}
-                      aria-label={t('Delete consultation', 'কনসাল্টেশন মুছুন')}
-                      className="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+                    {confirmDeleteConsultationId === con.id ? (
+                      <div className="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-lg px-2.5 py-1 text-xs shrink-0">
+                        <span className="text-red-900">
+                          {t('Delete visit?', 'ভিজিট মুছবেন?')}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteConsultation(con.id)}
+                          className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-700 rounded hover:bg-red-800 cursor-pointer"
+                        >
+                          {t('Delete', 'মুছুন')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeleteConsultationId(null)}
+                          className="px-1.5 py-0.5 text-[11px] text-slate-700 cursor-pointer"
+                        >
+                          {t('Cancel', 'বাতিল')}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeleteConsultationId(con.id)}
+                        aria-label={t('Delete consultation', 'কনসাল্টেশন মুছুন')}
+                        className="p-1.5 text-slate-400 hover:text-red-700 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
 
                   <div>
@@ -2098,14 +2131,33 @@ export function PatientDetailView({
                         {photoCategoryLabels[photo.category]} · {formatBytes(photo.sizeBytes)}
                       </p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => handleDeletePhoto(photo)}
-                      aria-label={t('Delete photo', 'ছবি মুছুন')}
-                      className="p-1.5 text-slate-400 hover:text-red-700 rounded hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    {confirmDeletePhotoId === photo.id ? (
+                      <div className="inline-flex items-center gap-1 bg-red-50 border border-red-200 rounded-lg px-2 py-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => handleDeletePhoto(photo)}
+                          className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-700 rounded hover:bg-red-800 cursor-pointer"
+                        >
+                          {t('Delete', 'মুছুন')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setConfirmDeletePhotoId(null)}
+                          className="px-1.5 py-0.5 text-[11px] text-slate-700 cursor-pointer"
+                        >
+                          {t('Cancel', 'বাতিল')}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmDeletePhotoId(photo.id)}
+                        aria-label={t('Delete photo', 'ছবি মুছুন')}
+                        className="p-1.5 text-slate-400 hover:text-red-700 rounded hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
                 </div>
               ))}

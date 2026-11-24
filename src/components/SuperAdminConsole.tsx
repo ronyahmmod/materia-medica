@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
 import {
   collection,
   doc,
+  getDoc,
   getDocs,
   serverTimestamp,
   setDoc,
@@ -25,6 +26,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  Search,
   Server,
   ShieldCheck,
   Trash2,
@@ -91,6 +93,8 @@ interface DeletedBackupItem {
   deletedBy?: string;
   ref: ReturnType<typeof doc>;
   hasUpdatedAt: boolean;
+  photoCategory?: string;
+  photoUrl?: string;
 }
 
 interface LegacyScanSummary {
@@ -170,6 +174,7 @@ export function SuperAdminConsole({
   // Deleted Backup & Restore State
   const [backupClinicFilter, setBackupClinicFilter] = useState<string>('all');
   const [backupKindFilter, setBackupKindFilter] = useState<'all' | DeletedRecordKind>('all');
+  const [backupSearchQuery, setBackupSearchQuery] = useState<string>('');
   const [backupItems, setBackupItems] = useState<DeletedBackupItem[]>([]);
   const [scanningBackup, setScanningBackup] = useState(false);
   const [backupScannedOnce, setBackupScannedOnce] = useState(false);
@@ -622,7 +627,7 @@ export function SuperAdminConsole({
     }
   };
 
-  const handleScanDeletedBackup = async () => {
+  const handleScanDeletedBackup = useCallback(async () => {
     setScanningBackup(true);
     setConsoleError(null);
     setBackupNotice(null);
@@ -648,6 +653,14 @@ export function SuperAdminConsole({
           const caseNo = String(patData.caseNumber || '');
 
           if (patData.isDeleted === true) {
+            const patientDetails = [
+              String(patData.phone || '').trim(),
+              String(patData.address || '').trim(),
+              String(patData.chiefComplaint || '').trim(),
+            ]
+              .filter(Boolean)
+              .join(' · ');
+
             collected.push({
               key: `pat:${clinic.id}:${patDoc.id}`,
               kind: 'patient',
@@ -656,7 +669,7 @@ export function SuperAdminConsole({
               docId: patDoc.id,
               patientId: patDoc.id,
               title: `${patName}${caseNo ? ` (${caseNo})` : ''}`,
-              subtitle: String(patData.chiefComplaint || patData.phone || ''),
+              subtitle: patientDetails,
               deletedAt: String(patData.deletedAt || ''),
               deletedBy: typeof patData.deletedBy === 'string' ? patData.deletedBy : undefined,
               ref: patDoc.ref,
@@ -706,6 +719,8 @@ export function SuperAdminConsole({
                 deletedBy: typeof phData.deletedBy === 'string' ? phData.deletedBy : undefined,
                 ref: phDoc.ref,
                 hasUpdatedAt: false,
+                photoCategory: String(phData.category || ''),
+                photoUrl: String(phData.url || ''),
               });
             }
           }
@@ -798,7 +813,13 @@ export function SuperAdminConsole({
     } finally {
       setScanningBackup(false);
     }
-  };
+  }, [backupClinicFilter, clinics]);
+
+  useEffect(() => {
+    if (activeTab === 'backup' && !backupScannedOnce && !scanningBackup && clinics.length > 0) {
+      void handleScanDeletedBackup();
+    }
+  }, [activeTab, backupScannedOnce, clinics.length, handleScanDeletedBackup, scanningBackup]);
 
   const handleRestoreBackupItem = async (item: DeletedBackupItem) => {
     setRestoringKey(item.key);
@@ -816,21 +837,37 @@ export function SuperAdminConsole({
             other.key !== item.key
         );
 
-        const batch = writeBatch(db);
-        batch.update(item.ref, {
-          isDeleted: false,
-          restoredAt: restoredIso,
-          updatedAt: serverTimestamp(),
-        });
+        const updates: Array<{
+          ref: ReturnType<typeof doc>;
+          data: Record<string, unknown>;
+        }> = [
+          {
+            ref: item.ref,
+            data: {
+              isDeleted: false,
+              restoredAt: restoredIso,
+              updatedAt: serverTimestamp(),
+            },
+          },
+          ...childMatches.map((child) => ({
+            ref: child.ref,
+            data: {
+              isDeleted: false,
+              restoredAt: restoredIso,
+              ...(child.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
+            },
+          })),
+        ];
 
-        for (const child of childMatches) {
-          batch.update(child.ref, {
-            isDeleted: false,
-            restoredAt: restoredIso,
-            ...(child.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
-          });
+        const CHUNK_SIZE = 400;
+        for (let i = 0; i < updates.length; i += CHUNK_SIZE) {
+          const chunk = updates.slice(i, i + CHUNK_SIZE);
+          const batch = writeBatch(db);
+          for (const op of chunk) {
+            batch.update(op.ref, op.data);
+          }
+          await batch.commit();
         }
-        await batch.commit();
 
         const restoredKeys = new Set([item.key, ...childMatches.map((c) => c.key)]);
         setBackupItems((prev) => prev.filter((x) => !restoredKeys.has(x.key)));
@@ -851,11 +888,20 @@ export function SuperAdminConsole({
             )
           : undefined;
 
+        const shouldRestorePortrait =
+          item.kind === 'photo' &&
+          item.photoCategory === 'portrait' &&
+          Boolean(item.photoUrl) &&
+          Boolean(item.patientId);
+
         if (parentPatientDeleted) {
           const batch = writeBatch(db);
           batch.update(parentPatientDeleted.ref, {
             isDeleted: false,
             restoredAt: restoredIso,
+            ...(shouldRestorePortrait
+              ? { portraitUrl: item.photoUrl, portraitPhotoId: item.docId }
+              : {}),
             updatedAt: serverTimestamp(),
           });
           batch.update(item.ref, {
@@ -872,6 +918,17 @@ export function SuperAdminConsole({
             restoredAt: restoredIso,
             ...(item.hasUpdatedAt ? { updatedAt: serverTimestamp() } : {}),
           });
+          if (shouldRestorePortrait && item.patientId) {
+            const patRef = tenantPatientDoc(item.clinicId, item.patientId);
+            const patSnap = await getDoc(patRef);
+            if (patSnap.exists() && !patSnap.data()?.portraitUrl) {
+              await updateDoc(patRef, {
+                portraitUrl: item.photoUrl,
+                portraitPhotoId: item.docId,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }
           setBackupItems((prev) => prev.filter((x) => x.key !== item.key));
         }
 
@@ -894,12 +951,19 @@ export function SuperAdminConsole({
   };
 
   const filteredBackupItems = useMemo(() => {
+    const q = backupSearchQuery.trim().toLowerCase();
     return backupItems.filter((item) => {
       if (backupClinicFilter !== 'all' && item.clinicId !== backupClinicFilter) return false;
       if (backupKindFilter !== 'all' && item.kind !== backupKindFilter) return false;
-      return true;
+      if (!q) return true;
+      return (
+        item.title.toLowerCase().includes(q) ||
+        item.subtitle.toLowerCase().includes(q) ||
+        item.clinicName.toLowerCase().includes(q) ||
+        item.kind.toLowerCase().includes(q)
+      );
     });
-  }, [backupItems, backupClinicFilter, backupKindFilter]);
+  }, [backupItems, backupClinicFilter, backupKindFilter, backupSearchQuery]);
 
   const backupKindLabel = (kind: DeletedRecordKind): string => {
     switch (kind) {
@@ -1862,32 +1926,48 @@ export function SuperAdminConsole({
           )}
 
           {backupScannedOnce && backupItems.length > 0 && (
-            <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
-              {(
-                [
-                  'all',
-                  'patient',
-                  'consultation',
-                  'fee',
-                  'note',
-                  'photo',
-                  'disease',
-                  'repertory',
-                ] as const
-              ).map((kind) => (
-                <button
-                  key={kind}
-                  type="button"
-                  onClick={() => setBackupKindFilter(kind)}
-                  className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
-                    backupKindFilter === kind
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {kind === 'all' ? t('All Types', 'সব ধরন') : backupKindLabel(kind)}
-                </button>
-              ))}
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex flex-wrap items-center gap-1 p-1 bg-slate-100 rounded-lg w-fit">
+                {(
+                  [
+                    'all',
+                    'patient',
+                    'consultation',
+                    'fee',
+                    'note',
+                    'photo',
+                    'disease',
+                    'repertory',
+                  ] as const
+                ).map((kind) => (
+                  <button
+                    key={kind}
+                    type="button"
+                    onClick={() => setBackupKindFilter(kind)}
+                    className={`px-2.5 py-1 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+                      backupKindFilter === kind
+                        ? 'bg-white text-slate-900 shadow-xs'
+                        : 'text-slate-600 hover:text-slate-900'
+                    }`}
+                  >
+                    {kind === 'all' ? t('All Types', 'সব ধরন') : backupKindLabel(kind)}
+                  </button>
+                ))}
+              </div>
+
+              <div className="relative">
+                <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="search"
+                  value={backupSearchQuery}
+                  onChange={(e) => setBackupSearchQuery(e.target.value)}
+                  placeholder={t(
+                    'Search patient, case #, phone, address...',
+                    'রোগী, কেস নং, ফোন বা ঠিকানা...'
+                  )}
+                  className="pl-8 pr-3 py-1.5 text-xs w-60 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
             </div>
           )}
 

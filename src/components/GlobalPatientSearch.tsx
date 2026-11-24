@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import { getDocs, query, where } from 'firebase/firestore';
-import { ArrowRight, Loader2, Search, User, X } from 'lucide-react';
+import { ArrowRight, Loader2, MapPin, Search, User, X } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { PATIENT_TYPE_LABELS_I18N, STATUS_LABELS_I18N } from '../i18n/translations';
 import { tenantPatientsCol } from '../lib/tenantPaths';
@@ -170,7 +170,7 @@ export function GlobalPatientSearch({
 
   const trimmedQuery = queryText.trim();
 
-  const { matches, totalMatchCount } = useMemo(() => {
+  const { matches, totalMatchCount, addressMatchCount } = useMemo(() => {
     const q = trimmedQuery.toLowerCase();
     const pool: Array<{ clinicId: string; clinicName: string; patient: Patient }> = [];
     const seen = new Set<string>();
@@ -202,15 +202,18 @@ export function GlobalPatientSearch({
         ...entry,
         score: 100 - idx,
       }));
-      return { matches: recent, totalMatchCount: pool.length };
+      return { matches: recent, totalMatchCount: pool.length, addressMatchCount: 0 };
     }
 
     const scored: SearchResultItem[] = [];
+    let addrMatches = 0;
+
     for (const entry of pool) {
       const p = entry.patient;
       const nameLower = p.fullName.toLowerCase();
       const caseLower = p.caseNumber.toLowerCase();
       const phoneLower = p.phone.toLowerCase();
+      const addressLower = (p.address || '').toLowerCase();
       const complaintLower = p.chiefComplaint.toLowerCase();
       const remedyLower = (p.lastRemedy || '').toLowerCase();
       const emailLower = (p.email || '').toLowerCase();
@@ -219,11 +222,17 @@ export function GlobalPatientSearch({
       const breedLower = (p.animalSpeciesOrBreed || '').toLowerCase();
       const typeLower = (p.patientType || 'human').toLowerCase();
 
+      const hasAddressMatch = Boolean(addressLower) && addressLower.includes(q);
+      if (hasAddressMatch) {
+        addrMatches += 1;
+      }
+
       let score = 0;
       if (caseLower === q || nameLower === q) score = 100;
       else if (nameLower.startsWith(q) || caseLower.startsWith(q)) score = 80;
       else if (phoneLower.includes(q)) score = 65;
       else if (nameLower.includes(q) || caseLower.includes(q) || ownerLower.includes(q)) score = 60;
+      else if (hasAddressMatch) score = 55;
       else if (remedyLower.includes(q)) score = 45;
       else if (complaintLower.includes(q) || breedLower.includes(q) || typeLower.includes(q)) score = 35;
       else if (emailLower.includes(q) || notesLower.includes(q)) score = 20;
@@ -239,8 +248,9 @@ export function GlobalPatientSearch({
 
     scored.sort((a, b) => b.score - a.score || a.patient.fullName.localeCompare(b.patient.fullName));
     return {
-      matches: scored.slice(0, 8),
+      matches: scored.slice(0, 12),
       totalMatchCount: scored.length,
+      addressMatchCount: addrMatches,
     };
   }, [activeClinic, activeClinicPatients, clinicMap, otherClinicsPatients, trimmedQuery]);
 
@@ -307,8 +317,8 @@ export function GlobalPatientSearch({
           }}
           onKeyDown={handleInputKeyDown}
           placeholder={t(
-            'Search all patients (name, case #, phone, remedy)...',
-            'রোগী খুঁজুন (নাম, কেস নং, ফোন, ওষুধ)...'
+            'Search all patients (name, case #, phone, address, remedy)...',
+            'রোগী খুঁজুন (নাম, কেস নং, ফোন, ঠিকানা, ওষুধ)...'
           )}
           className="w-full pl-8 pr-8 sm:pr-14 py-1.5 text-xs bg-slate-50 border border-slate-300 rounded-lg text-slate-900 placeholder:text-slate-400 focus:bg-white focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700 transition-colors"
         />
@@ -343,15 +353,26 @@ export function GlobalPatientSearch({
           aria-label={t('Matching patient records', 'মিলে যাওয়া রোগীর তালিকা')}
           className="fixed left-3 right-3 top-[4.25rem] sm:absolute sm:left-0 sm:right-0 sm:top-auto sm:mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden"
         >
-          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 flex items-center justify-between text-[11px] text-slate-500">
-            <span className="font-medium text-slate-700">
-              {trimmedQuery
-                ? t(
-                    `${totalMatchCount} matching patient${totalMatchCount === 1 ? '' : 's'}`,
-                    `${totalMatchCount} জন রোগী পাওয়া গেছে`
-                  )
-                : t('Quick Jump — Recent Patients', 'দ্রুত খুলুন — সাম্প্রতিক রোগী')}
-            </span>
+          <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="font-medium text-slate-700 tabular-nums">
+                {trimmedQuery
+                  ? t(
+                      `${totalMatchCount} matching patient${totalMatchCount === 1 ? '' : 's'}`,
+                      `মোট ${totalMatchCount} জন রোগী পাওয়া গেছে`
+                    )
+                  : t('Quick Jump — Recent Patients', 'দ্রুত খুলুন — সাম্প্রতিক রোগী')}
+              </span>
+              {trimmedQuery && addressMatchCount > 0 && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-teal-50 border border-teal-200 text-teal-800 font-medium text-[10px] tabular-nums">
+                  <MapPin className="w-3 h-3 shrink-0" />
+                  {t(
+                    `${addressMatchCount} at this address`,
+                    `এই ঠিকানায় ${addressMatchCount} জন`
+                  )}
+                </span>
+              )}
+            </div>
             {showClinicBadge && (
               <span className="text-[10px] text-slate-400">
                 {t('All accessible clinics', 'সব ক্লিনিক জুড়ে')}
@@ -415,6 +436,12 @@ export function GlobalPatientSearch({
                           {p.lastRemedy ? ` · ${p.lastRemedy}` : ''}
                           {p.chiefComplaint ? ` · ${p.chiefComplaint}` : ''}
                         </p>
+                        {p.address && (
+                          <p className="text-[10px] text-slate-500 truncate mt-0.5 flex items-center gap-1">
+                            <MapPin className="w-3 h-3 text-slate-400 shrink-0" />
+                            <span className="truncate">{p.address}</span>
+                          </p>
+                        )}
                         {showClinicBadge && (
                           <p className="text-[10px] text-teal-800 font-medium mt-0.5 truncate">
                             {item.clinicName}
