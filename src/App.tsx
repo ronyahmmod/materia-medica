@@ -37,6 +37,8 @@ import { PatientAgeChart } from './components/PatientAgeChart';
 import { PatientDetailView } from './components/PatientDetailView';
 import { PatientFormModal } from './components/PatientFormModal';
 import { PlanAndHostingView } from './components/PlanAndHostingView';
+import { CopyrightFooter } from './components/CopyrightFooter';
+import { GlobalPatientSearch } from './components/GlobalPatientSearch';
 import { RepertoryView } from './components/RepertoryView';
 import { SecureClinicalImage } from './components/SecureClinicalImage';
 import { SuperAdminConsole } from './components/SuperAdminConsole';
@@ -1044,35 +1046,63 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col">
         {/* Top Bar Contract */}
-        <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-6 shrink-0 print:hidden">
+        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-5 shrink-0 print:hidden">
           <div className="flex items-center gap-3 min-w-0">
             <button
               type="button"
               onClick={() => setMobileMenuOpen(true)}
               aria-label="Open navigation"
-              className="p-2 -ml-2 text-slate-600 hover:text-slate-900 lg:hidden cursor-pointer"
+              className="p-2 -ml-2 text-slate-600 hover:text-slate-900 lg:hidden cursor-pointer shrink-0"
             >
               <Menu className="w-5 h-5" />
             </button>
-            <div className="flex items-center gap-2 text-sm min-w-0">
-              <span className="text-slate-500 hidden sm:inline truncate">
+            <div className="hidden md:flex items-center gap-2 text-sm min-w-0 max-w-[240px] xl:max-w-xs">
+              <span className="text-slate-500 hidden xl:inline truncate">
                 {showingSaasConsole
                   ? platformConfig.platformName
                   : activeClinic?.clinicName || platformConfig.platformName}
               </span>
-              <span className="text-slate-300 hidden sm:inline" aria-hidden="true">
+              <span className="text-slate-300 hidden xl:inline" aria-hidden="true">
                 /
               </span>
               <span className="font-medium text-slate-900 truncate">{breadcrumbLabel}</span>
             </div>
           </div>
 
-          <div className="flex items-center gap-2.5 shrink-0">
+          <GlobalPatientSearch
+            clinics={clinics}
+            activeClinic={activeClinic}
+            activeClinicPatients={patients}
+            isSuperAdmin={effectiveIsSuperAdmin}
+            currentUserUid={currentUser.uid}
+            onSelectPatient={(clinicId, patientId) => {
+              if (clinicId !== activeClinic?.id) {
+                setSelectedClinicId(clinicId);
+              }
+              setAppMode('clinic');
+              setActiveNav('patients');
+              setSelectedPatientId(patientId);
+              setMobileMenuOpen(false);
+            }}
+            onViewAllInRegistry={(clinicId, queryText) => {
+              if (clinicId !== activeClinic?.id) {
+                setSelectedClinicId(clinicId);
+              }
+              setAppMode('clinic');
+              setActiveNav('patients');
+              setSelectedPatientId(null);
+              setStatusFilter('all');
+              setSearchQuery(queryText);
+              setMobileMenuOpen(false);
+            }}
+          />
+
+          <div className="flex items-center gap-2 shrink-0">
             {!showingSaasConsole && activeClinic && (
               <button
                 type="button"
                 onClick={handleCopyActiveClinicUrl}
-                className="hidden md:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
+                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
               >
                 {copiedActiveUrl ? (
                   <>
@@ -1704,6 +1734,8 @@ export default function App() {
             </div>
           )}
         </main>
+
+        <CopyrightFooter variant="workspace" />
       </div>
 
       {/* Patient Create/Edit Modal */}

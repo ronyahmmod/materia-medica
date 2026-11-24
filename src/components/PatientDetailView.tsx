@@ -12,10 +12,13 @@ import {
   ArrowLeft,
   Banknote,
   Calendar,
+  CalendarClock,
   Camera,
   CheckCircle2,
+  ChevronUp,
   Compass,
   Edit3,
+  FilePlus2,
   FileText,
   Loader2,
   Plus,
@@ -23,6 +26,7 @@ import {
   Sparkles,
   Trash2,
   X,
+  Zap,
 } from 'lucide-react';
 import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { formatCashAmount, roundAmount, summarizeFees } from '../lib/feeCalculations';
@@ -147,6 +151,17 @@ export function PatientDetailView({
   const lastQueriedNoteRef = useRef('');
   const prevManualTickRef = useRef(0);
 
+  // Floating Quick Action menu & inline Follow-up scheduler state
+  const [quickActionOpen, setQuickActionOpen] = useState(false);
+  const [showFollowUpModal, setShowFollowUpModal] = useState(false);
+  const [followUpDateInput, setFollowUpDateInput] = useState(
+    () => patient.nextFollowUpDate || ''
+  );
+  const [markFollowUpStatus, setMarkFollowUpStatus] = useState(true);
+  const [savingFollowUp, setSavingFollowUp] = useState(false);
+  const quickActionRef = useRef<HTMLDivElement>(null);
+  const feesSectionRef = useRef<HTMLElement>(null);
+
   useEffect(() => {
     setLoadingSubdata(true);
     const consPath = `clinics/${clinic.id}/patients/${patient.id}/consultations`;
@@ -230,7 +245,28 @@ export function PatientDetailView({
     setNoteSuggestions([]);
     setSuggestionError(null);
     lastQueriedNoteRef.current = '';
-  }, [patient.id]);
+    setFollowUpDateInput(patient.nextFollowUpDate || '');
+  }, [patient.id, patient.nextFollowUpDate]);
+
+  useEffect(() => {
+    if (!quickActionOpen) return;
+    const handleOutsideClick = (event: MouseEvent) => {
+      if (quickActionRef.current && !quickActionRef.current.contains(event.target as Node)) {
+        setQuickActionOpen(false);
+      }
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setQuickActionOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', handleOutsideClick);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [quickActionOpen]);
 
   useEffect(() => {
     const isManualTrigger = manualSuggestTick !== prevManualTickRef.current;
@@ -657,6 +693,109 @@ export function PatientDetailView({
     }
   };
 
+  const addDaysIso = (days: number): string => {
+    const dt = new Date();
+    dt.setDate(dt.getDate() + days);
+    return dt.toISOString().slice(0, 10);
+  };
+
+  const quickTargetFeeRecord = useMemo(
+    () => feeRecords.find((rec) => rec.dueAmount > 0) || feeRecords[0] || null,
+    [feeRecords]
+  );
+
+  const handleQuickAddRemedyLog = () => {
+    setQuickActionOpen(false);
+    setActiveTab('consultations');
+    setShowConsultationModal(true);
+  };
+
+  const handleQuickUpdateFeeRecord = () => {
+    setQuickActionOpen(false);
+    setActiveTab('fees');
+    setEditingFee(quickTargetFeeRecord);
+    setShowFeeModal(true);
+    window.requestAnimationFrame(() => {
+      feesSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  };
+
+  const handleOpenScheduleFollowUp = () => {
+    setQuickActionOpen(false);
+    setActionError(null);
+    setFollowUpDateInput(patient.nextFollowUpDate || addDaysIso(7));
+    setMarkFollowUpStatus(patient.status === 'active' || patient.status === 'follow-up');
+    setShowFollowUpModal(true);
+  };
+
+  const handleSaveFollowUpSchedule = async (e: FormEvent) => {
+    e.preventDefault();
+    const cleanDate = followUpDateInput.trim().slice(0, 32);
+    if (!cleanDate) {
+      setActionError(
+        t('Please choose a follow-up date.', 'অনুগ্রহ করে ফলো-আপের তারিখ নির্বাচন করুন।')
+      );
+      return;
+    }
+
+    setSavingFollowUp(true);
+    setActionError(null);
+    try {
+      const updates: Record<string, unknown> = {
+        nextFollowUpDate: cleanDate,
+        updatedAt: serverTimestamp(),
+      };
+      if (markFollowUpStatus && patient.status !== 'archived') {
+        updates.status = 'follow-up' as PatientStatus;
+      }
+      await updateDoc(tenantPatientDoc(clinic.id, patient.id), updates);
+      setShowFollowUpModal(false);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `clinics/${clinic.id}/patients/${patient.id}`
+        );
+      }
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to schedule follow-up.', 'ফলো-আপ সময় নির্ধারণ করা যায়নি।')
+      );
+    } finally {
+      setSavingFollowUp(false);
+    }
+  };
+
+  const handleClearFollowUpSchedule = async () => {
+    setSavingFollowUp(true);
+    setActionError(null);
+    try {
+      await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
+        nextFollowUpDate: '',
+        updatedAt: serverTimestamp(),
+      });
+      setFollowUpDateInput('');
+      setShowFollowUpModal(false);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+        handleFirestoreError(
+          error,
+          OperationType.UPDATE,
+          `clinics/${clinic.id}/patients/${patient.id}`
+        );
+      }
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to clear follow-up date.', 'ফলো-আপ তারিখ মুছে ফেলা যায়নি।')
+      );
+    } finally {
+      setSavingFollowUp(false);
+    }
+  };
+
   const initials = patient.fullName
     .split(' ')
     .map((p) => p[0])
@@ -664,9 +803,16 @@ export function PatientDetailView({
     .slice(0, 2)
     .toUpperCase();
 
+  const hasOpenOverlay =
+    showPrintView ||
+    Boolean(lightboxPhoto) ||
+    showConsultationModal ||
+    showFeeModal ||
+    showFollowUpModal;
+
   return (
     <>
-      <div className={showPrintView ? 'space-y-6 print:hidden' : 'space-y-6'}>
+      <div className="space-y-6 print:hidden">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <button
             type="button"
@@ -684,7 +830,7 @@ export function PatientDetailView({
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
             >
               <Printer className="w-3.5 h-3.5" />
-              {t('Print Case', 'কেস প্রিন্ট করুন')}
+              {t('Print Patient Report', 'রোগীর রিপোর্ট প্রিন্ট করুন')}
             </button>
             <button
               type="button"
@@ -1497,7 +1643,7 @@ export function PatientDetailView({
           onSaveSynthesisNote={handleSaveMappedNote}
         />
           ) : activeTab === 'fees' ? (
-        <section aria-label={t('Cash Fees', 'নগদ ফি')} className="space-y-5">
+        <section ref={feesSectionRef} aria-label={t('Cash Fees', 'নগদ ফি')} className="space-y-5">
           {/* Patient Cash Fee Summary & Header */}
           <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
             <div>
@@ -1870,6 +2016,136 @@ export function PatientDetailView({
         />
       )}
 
+      {showFollowUpModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('Schedule Follow-up', 'ফলো-আপ সময় নির্ধারণ')}
+          className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4"
+        >
+          <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <h2 className="font-display text-base font-semibold text-slate-900">
+                  {t('Schedule Follow-up', 'ফলো-আপ সময় নির্ধারণ')}
+                </h2>
+                <p className="text-xs text-slate-500 truncate mt-0.5">
+                  {patient.fullName} · <span className="font-mono">{patient.caseNumber}</span>
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowFollowUpModal(false)}
+                aria-label={t('Close dialog', 'ডায়ালগ বন্ধ করুন')}
+                className="p-1.5 text-slate-400 hover:text-slate-900 rounded-lg hover:bg-slate-100 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveFollowUpSchedule} className="p-5 space-y-4">
+              <div>
+                <label className="block text-xs font-medium text-slate-700 mb-1.5">
+                  {t('Quick Date Presets', 'দ্রুত তারিখ নির্বাচন')}
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    { days: 7, label: t('+7 Days', '+৭ দিন') },
+                    { days: 14, label: t('+14 Days', '+১৪ দিন') },
+                    { days: 30, label: t('+30 Days', '+৩০ দিন') },
+                  ].map((preset) => {
+                    const presetIso = addDaysIso(preset.days);
+                    const isSelected = followUpDateInput === presetIso;
+                    return (
+                      <button
+                        key={preset.days}
+                        type="button"
+                        onClick={() => setFollowUpDateInput(presetIso)}
+                        className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors cursor-pointer ${
+                          isSelected
+                            ? `${palette.softPanel}`
+                            : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label
+                  htmlFor="quick-followup-date"
+                  className="block text-xs font-medium text-slate-700 mb-1.5"
+                >
+                  {t('Next Follow-up Visit Date', 'পরবর্তী ফলো-আপ ভিজিটের তারিখ')}
+                </label>
+                <input
+                  id="quick-followup-date"
+                  type="date"
+                  required
+                  maxLength={32}
+                  value={followUpDateInput}
+                  onChange={(e) => setFollowUpDateInput(e.target.value)}
+                  className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+
+              {patient.status !== 'archived' && (
+                <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={markFollowUpStatus}
+                    onChange={(e) => setMarkFollowUpStatus(e.target.checked)}
+                    className="rounded border-slate-300 text-teal-700 focus:ring-teal-700"
+                  />
+                  <span>
+                    {t(
+                      'Set patient status to "Follow-up"',
+                      'রোগীর অবস্থা "ফলো-আপ" হিসেবে সেট করুন'
+                    )}
+                  </span>
+                </label>
+              )}
+
+              <div className="pt-2 border-t border-slate-200 flex items-center justify-between gap-2">
+                {patient.nextFollowUpDate ? (
+                  <button
+                    type="button"
+                    disabled={savingFollowUp}
+                    onClick={handleClearFollowUpSchedule}
+                    className="px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                  >
+                    {t('Clear Date', 'তারিখ মুছুন')}
+                  </button>
+                ) : (
+                  <span />
+                )}
+
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowFollowUpModal(false)}
+                    className="px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
+                  >
+                    {t('Cancel', 'বাতিল')}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingFollowUp}
+                    className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg disabled:opacity-60 cursor-pointer ${palette.primaryBtn}`}
+                  >
+                    {savingFollowUp && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                    {t('Save Follow-up', 'ফলো-আপ সংরক্ষণ')}
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
       {lightboxPhoto && (
         <div className="fixed inset-0 z-50 bg-slate-900/80 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-3xl w-full overflow-hidden border border-slate-200">
@@ -1902,19 +2178,124 @@ export function PatientDetailView({
           </div>
         </div>
       )}
+
+      {/* Floating Quick Action Menu */}
+      {!hasOpenOverlay && (
+        <div
+          ref={quickActionRef}
+          className="fixed bottom-6 right-6 z-40 flex flex-col items-end print:hidden"
+        >
+          {quickActionOpen && (
+            <div
+              role="menu"
+              aria-label={t('Quick Action options', 'কুইক অ্যাকশন মেনু')}
+              className="mb-2.5 w-64 bg-white border border-slate-200 rounded-xl shadow-xl p-2 space-y-1"
+            >
+              <div className="px-2.5 py-1.5 border-b border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
+                <span className="font-semibold text-slate-700">
+                  {t('Quick Action', 'কুইক অ্যাকশন')}
+                </span>
+                <span className="font-mono tabular-nums">{patient.caseNumber}</span>
+              </div>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleQuickAddRemedyLog}
+                className="w-full flex items-start gap-3 px-2.5 py-2.5 text-left rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <FilePlus2 className={`w-4 h-4 mt-0.5 shrink-0 ${palette.navIconActive}`} />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-900">
+                    {t('Add Remedy Log', 'রেমেডি লগ যোগ করুন')}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {t('Log consultation & potency', 'ভিজিট ও ওষুধ লিপিবদ্ধ করুন')}
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleQuickUpdateFeeRecord}
+                className="w-full flex items-start gap-3 px-2.5 py-2.5 text-left rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <Banknote className={`w-4 h-4 mt-0.5 shrink-0 ${palette.navIconActive}`} />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-900">
+                    {t('Update Fee Record', 'ফি রেকর্ড আপডেট করুন')}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {quickTargetFeeRecord
+                      ? quickTargetFeeRecord.dueAmount > 0
+                        ? t(
+                            `Update due (${formatCashAmount(quickTargetFeeRecord.dueAmount)})`,
+                            `বকেয়া আপডেট (${formatCashAmount(quickTargetFeeRecord.dueAmount)})`
+                          )
+                        : t('Edit latest cash fee entry', 'সর্বশেষ ফি এন্ট্রি সম্পাদনা')
+                      : t('Record new cash fee entry', 'নতুন নগদ ফি এন্ট্রি')}
+                  </p>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleOpenScheduleFollowUp}
+                className="w-full flex items-start gap-3 px-2.5 py-2.5 text-left rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <CalendarClock className={`w-4 h-4 mt-0.5 shrink-0 ${palette.navIconActive}`} />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-900">
+                    {t('Schedule Follow-up', 'ফলো-আপ সময় নির্ধারণ')}
+                  </p>
+                  <p className="text-[11px] text-slate-500 tabular-nums">
+                    {patient.nextFollowUpDate
+                      ? `${t('Current:', 'বর্তমান:')} ${patient.nextFollowUpDate}`
+                      : t('Set next visit date', 'পরবর্তী ভিজিটের তারিখ দিন')}
+                  </p>
+                </div>
+              </button>
+            </div>
+          )}
+
+          <button
+            type="button"
+            aria-expanded={quickActionOpen}
+            aria-haspopup="menu"
+            onClick={() => setQuickActionOpen((prev) => !prev)}
+            className={`inline-flex items-center gap-2 px-4 py-3 text-xs font-semibold rounded-xl shadow-lg transition-all cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
+          >
+            {quickActionOpen ? (
+              <X className="w-4 h-4" />
+            ) : (
+              <Zap className="w-4 h-4" />
+            )}
+            <span>{t('Quick Action', 'কুইক অ্যাকশন')}</span>
+            <ChevronUp
+              className={`w-3.5 h-3.5 transition-transform ${
+                quickActionOpen ? 'rotate-180' : ''
+              }`}
+            />
+          </button>
+        </div>
+      )}
       </div>
 
-      {showPrintView && (
-        <PatientCasePrintView
-          patient={patient}
-          consultations={consultations}
-          clinicalNotes={clinicalNotes}
-          photos={photos}
-          clinicName={clinic.clinicName}
-          practitionerName={clinic.practitionerName}
-          onClose={() => setShowPrintView(false)}
-        />
-      )}
+      <PatientCasePrintView
+        patient={patient}
+        consultations={consultations}
+        clinicalNotes={clinicalNotes}
+        photos={photos}
+        feeRecords={feeRecords}
+        clinicName={clinic.clinicName}
+        practitionerName={clinic.practitionerName}
+        clinicPhone={clinic.phone}
+        clinicAddress={clinic.address}
+        printOnly={!showPrintView}
+        onClose={() => setShowPrintView(false)}
+      />
     </>
   );
 }

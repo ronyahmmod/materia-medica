@@ -24,16 +24,52 @@
 
 @media print {
   @page {
-    size: auto;
-    margin: 12mm;
+    size: A4 portrait;
+    margin: 12mm 14mm;
   }
 
   html,
   body {
+    width: 100%;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
     background: #ffffff !important;
     color: #0f172a !important;
+    font-size: 11pt;
     -webkit-print-color-adjust: exact;
     print-color-adjust: exact;
   }
-}
 
+  .print-report-sheet {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background: #ffffff !important;
+  }
+
+  .print-report-sheet table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+  }
+
+  .print-report-sheet thead {
+    display: table-header-group;
+  }
+
+  .print-report-sheet tr,
+  .print-avoid-break {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  .print-report-sheet h2,
+  .print-report-sheet h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+}

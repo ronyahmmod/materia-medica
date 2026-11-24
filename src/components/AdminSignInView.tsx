@@ -20,6 +20,7 @@ import { auth, googleProvider } from '../firebase';
 import { LanguageSwitcher, useLanguage } from '../i18n/LanguageContext';
 import { ACCENT_THEME_PALETTES, SUPER_ADMIN_EMAIL } from '../lib/tenantPaths';
 import type { ClinicPublicProfile } from '../types/clinic';
+import { CopyrightFooter } from './CopyrightFooter';
 
 interface AdminSignInViewProps {
   unauthorizedUser: User | null;
@@ -440,6 +441,8 @@ export function AdminSignInView({
           />
         </div>
       </div>
+
+      <CopyrightFooter variant="auth" />
     </div>
   );
 }
