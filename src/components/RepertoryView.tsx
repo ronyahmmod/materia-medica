@@ -1,23 +1,18 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
-  collection,
   deleteDoc,
-  doc,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import {
   ArrowLeftRight,
-  BookMarked,
   BookOpen,
   BookmarkPlus,
   Check,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   History,
   Loader2,
@@ -28,12 +23,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import {
-  MATERIA_MEDICA_RESOURCES,
-  POTENCY_GUIDELINES,
-  STARTER_RUBRICS_BN,
-} from '../data/banglaRepertoryResources';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { REPERTORY_CHAPTER_LABELS_I18N } from '../i18n/translations';
 import {
@@ -45,9 +35,15 @@ import {
   type RemedySeverityGrade,
 } from '../lib/repertoryApi';
 import {
+  ACCENT_THEME_PALETTES,
+  tenantRepertoryCol,
+  tenantRepertoryDoc,
+} from '../lib/tenantPaths';
+import {
   COMMON_REMEDIES,
   FIELD_LIMITS,
   REPERTORY_CHAPTERS,
+  type ClinicTenant,
   type RepertoryChapter,
   type RepertoryEntry,
 } from '../types/clinic';
@@ -209,8 +205,14 @@ function normalizeRemedyList(primary: string, extraInput: string): string[] {
   return result;
 }
 
-export function RepertoryView() {
+interface RepertoryViewProps {
+  clinic: ClinicTenant;
+  isSuperAdmin: boolean;
+}
+
+export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
   const { language, t } = useLanguage();
+  const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
   const chapterLabels = REPERTORY_CHAPTER_LABELS_I18N[language];
   const [entries, setEntries] = useState<RepertoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -223,8 +225,6 @@ export function RepertoryView() {
   const [editingEntry, setEditingEntry] = useState<RepertoryEntry | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [seeding, setSeeding] = useState(false);
-  const [addingBanglaPack, setAddingBanglaPack] = useState(false);
-  const [showResources, setShowResources] = useState(true);
 
   // Quick Search (AI) State
   const [quickQuery, setQuickQuery] = useState('');
@@ -265,20 +265,32 @@ export function RepertoryView() {
 
   useEffect(() => {
     setLoading(true);
-    const unsub = onSnapshot(
-      query(collection(db, 'repertory_entries'), orderBy('updatedAt', 'desc')),
-      (snapshot) => {
-        setEntries(
-          snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<RepertoryEntry, 'id'>) }))
+    const userUid = auth.currentUser?.uid || '';
+    const repPath = `clinics/${clinic.id}/repertory_entries`;
+    const source = isSuperAdmin
+      ? tenantRepertoryCol(clinic.id)
+      : query(
+          tenantRepertoryCol(clinic.id),
+          where('clinicAccessUids', 'array-contains', userUid)
         );
+
+    const unsub = onSnapshot(
+      source,
+      (snapshot) => {
+        const rows = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<RepertoryEntry, 'id'>),
+        }));
+        rows.sort((a, b) => (b.updatedAt?.toMillis?.() ?? 0) - (a.updatedAt?.toMillis?.() ?? 0));
+        setEntries(rows);
         setLoading(false);
       },
       (error) => {
-        handleFirestoreError(error, OperationType.LIST, 'repertory_entries');
+        handleFirestoreError(error, OperationType.LIST, repPath);
       }
     );
     return () => unsub();
-  }, []);
+  }, [clinic.id, isSuperAdmin]);
 
   useEffect(() => {
     return () => {
@@ -300,13 +312,6 @@ export function RepertoryView() {
     }, LOCAL_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
   }, [searchQuery]);
-
-  const missingBanglaRubrics = useMemo(() => {
-    const existingRubrics = new Set(entries.map((entry) => entry.rubric.trim().toLowerCase()));
-    return STARTER_RUBRICS_BN.filter(
-      (seed) => !existingRubrics.has(seed.rubric.trim().toLowerCase())
-    );
-  }, [entries]);
 
   const filteredEntries = useMemo(() => {
     const q = debouncedSearchQuery.trim().toLowerCase();
@@ -815,6 +820,9 @@ export function RepertoryView() {
     const remedies = normalizeRemedyList(cleanPrimary, suggestion.differentialRemedies.join(', '));
 
     const payload: Record<string, unknown> = {
+      clinicId: clinic.id,
+      clinicAccessEmails: clinic.accessEmails,
+      clinicAccessUids: clinic.authorizedUids || [],
       chapter: safeChapter,
       rubric: cleanRubric,
       primaryRemedy: cleanPrimary,
@@ -833,10 +841,14 @@ export function RepertoryView() {
 
     setSavingSuggestionKey(suggestionKey);
     try {
-      await setDoc(doc(db, 'repertory_entries', entryId), payload);
+      await setDoc(tenantRepertoryDoc(clinic.id, entryId), payload);
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.CREATE, `repertory_entries/${entryId}`);
+        handleFirestoreError(
+          error,
+          OperationType.CREATE,
+          `clinics/${clinic.id}/repertory_entries/${entryId}`
+        );
       }
       setQuickError(error instanceof Error ? error.message : 'Unable to save suggested rubric.');
     } finally {
@@ -911,7 +923,7 @@ export function RepertoryView() {
     const remedies = normalizeRemedyList(trimmedPrimary, otherRemediesInput);
     const entryId =
       editingEntry?.id || `rep_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const path = `repertory_entries/${entryId}`;
+    const path = `clinics/${clinic.id}/repertory_entries/${entryId}`;
 
     setSubmitting(true);
     try {
@@ -931,13 +943,14 @@ export function RepertoryView() {
       }
 
       if (editingEntry) {
-        payload.createdBy = editingEntry.createdBy;
-        payload.createdAt = editingEntry.createdAt;
-        await updateDoc(doc(db, 'repertory_entries', entryId), payload);
+        await updateDoc(tenantRepertoryDoc(clinic.id, entryId), payload);
       } else {
+        payload.clinicId = clinic.id;
+        payload.clinicAccessEmails = clinic.accessEmails;
+        payload.clinicAccessUids = clinic.authorizedUids || [];
         payload.createdBy = uid;
         payload.createdAt = serverTimestamp();
-        await setDoc(doc(db, 'repertory_entries', entryId), payload);
+        await setDoc(tenantRepertoryDoc(clinic.id, entryId), payload);
       }
 
       setShowModal(false);
@@ -957,10 +970,14 @@ export function RepertoryView() {
 
   const handleDeleteEntry = async (entryId: string) => {
     try {
-      await deleteDoc(doc(db, 'repertory_entries', entryId));
+      await deleteDoc(tenantRepertoryDoc(clinic.id, entryId));
       setConfirmDeleteId(null);
     } catch (error) {
-      handleFirestoreError(error, OperationType.DELETE, `repertory_entries/${entryId}`);
+      handleFirestoreError(
+        error,
+        OperationType.DELETE,
+        `clinics/${clinic.id}/repertory_entries/${entryId}`
+      );
     }
   };
 
@@ -968,11 +985,14 @@ export function RepertoryView() {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     setSeeding(true);
-    const seeds = language === 'bn' ? STARTER_RUBRICS_BN : STARTER_RUBRICS;
+    const seeds = STARTER_RUBRICS;
     try {
       for (const seed of seeds) {
         const entryId = `rep_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-        await setDoc(doc(db, 'repertory_entries', entryId), {
+        await setDoc(tenantRepertoryDoc(clinic.id, entryId), {
+          clinicId: clinic.id,
+          clinicAccessEmails: clinic.accessEmails,
+          clinicAccessUids: clinic.authorizedUids || [],
           chapter: seed.chapter,
           rubric: seed.rubric.slice(0, FIELD_LIMITS.rubricMax),
           primaryRemedy: seed.primaryRemedy.slice(0, FIELD_LIMITS.remedyNameMax),
@@ -985,35 +1005,9 @@ export function RepertoryView() {
         });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'repertory_entries');
+      handleFirestoreError(error, OperationType.CREATE, `clinics/${clinic.id}/repertory_entries`);
     } finally {
       setSeeding(false);
-    }
-  };
-
-  const handleAddBanglaRubricPack = async () => {
-    const uid = auth.currentUser?.uid;
-    if (!uid || missingBanglaRubrics.length === 0) return;
-    setAddingBanglaPack(true);
-    try {
-      for (const seed of missingBanglaRubrics) {
-        const entryId = `rep_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-        await setDoc(doc(db, 'repertory_entries', entryId), {
-          chapter: seed.chapter,
-          rubric: seed.rubric.slice(0, FIELD_LIMITS.rubricMax),
-          primaryRemedy: seed.primaryRemedy.slice(0, FIELD_LIMITS.remedyNameMax),
-          remedies: seed.remedies.slice(0, 20),
-          modalities: seed.modalities.slice(0, FIELD_LIMITS.modalitiesMax),
-          symptomNotes: seed.symptomNotes.slice(0, FIELD_LIMITS.symptomNotesMax),
-          createdBy: uid,
-          createdAt: serverTimestamp(),
-          updatedAt: serverTimestamp(),
-        });
-      }
-    } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, 'repertory_entries');
-    } finally {
-      setAddingBanglaPack(false);
     }
   };
 
@@ -1033,22 +1027,6 @@ export function RepertoryView() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-          {!loading && missingBanglaRubrics.length > 0 && (
-            <button
-              type="button"
-              disabled={addingBanglaPack}
-              onClick={handleAddBanglaRubricPack}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-teal-900 bg-teal-50 border border-teal-200 rounded-lg hover:bg-teal-100 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <BookMarked className="w-3.5 h-3.5 text-teal-700" />
-              {addingBanglaPack
-                ? t('Adding Bangla Rubrics...', 'বাংলা রুব্রিক যোগ হচ্ছে...')
-                : t(
-                    `Add Bangla Rubrics (${missingBanglaRubrics.length})`,
-                    `বাংলা রুব্রিক প্যাক (${missingBanglaRubrics.length})`
-                  )}
-            </button>
-          )}
           {entries.length === 0 && !loading && (
             <button
               type="button"
@@ -1065,7 +1043,7 @@ export function RepertoryView() {
           <button
             type="button"
             onClick={openCreateModal}
-            className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap"
+            className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
           >
             <Plus className="w-3.5 h-3.5" />
             {t('Add Symptom Rubric', 'লক্ষণ রুব্রিক যোগ করুন')}
@@ -2064,152 +2042,6 @@ export function RepertoryView() {
           })}
         </div>
       )}
-
-      {/* Bilingual Materia Medica & Potency Reference */}
-      <section
-        aria-label={t(
-          'Materia Medica and Potency Reference',
-          'মেটেরিয়া মেডিকা ও পোটেন্সি সহায়িকা'
-        )}
-        className="bg-white border border-slate-200 rounded-xl p-5 space-y-4"
-      >
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2">
-              <BookMarked className="w-4 h-4 text-teal-700 shrink-0" />
-              <h2 className="font-display text-sm font-semibold text-slate-900">
-                {t(
-                  'Materia Medica & Potency Reference',
-                  'মেটেরিয়া মেডিকা ও পোটেন্সি সহায়িকা'
-                )}
-              </h2>
-            </div>
-            <p className="text-xs text-slate-500 mt-0.5">
-              {t(
-                'Core polycrest profiles and classical potency repetition protocols available in English and Bangla.',
-                'প্রধান পলিক্রেস্ট ওষুধের ধাতুগত পরিচিতি ও ক্লাসিক্যাল পোটেন্সি প্রয়োগবিধি (বাংলা ও ইংরেজিতে)।'
-              )}
-            </p>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => setShowResources((prev) => !prev)}
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 border border-slate-200 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer whitespace-nowrap self-start sm:self-auto"
-          >
-            {showResources ? (
-              <>
-                <ChevronUp className="w-3.5 h-3.5" />
-                {t('Hide Resources', 'সহায়িকা লুকান')}
-              </>
-            ) : (
-              <>
-                <ChevronDown className="w-3.5 h-3.5" />
-                {t('Show Resources', 'সহায়িকা দেখুন')}
-              </>
-            )}
-          </button>
-        </div>
-
-        {showResources && (
-          <div className="space-y-6 pt-2 border-t border-slate-100">
-            <div className="space-y-3">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {t('Key Polycrest Materia Medica', 'প্রধান পলিক্রেস্ট মেটেরিয়া মেডিকা')}
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
-                {MATERIA_MEDICA_RESOURCES.map((profile) => (
-                  <article
-                    key={profile.remedy}
-                    className="border border-slate-200 rounded-lg p-4 bg-slate-50/60 flex flex-col justify-between gap-2.5"
-                  >
-                    <div className="space-y-1.5">
-                      <div className="flex items-start justify-between gap-2">
-                        <div>
-                          <h4 className="font-display text-sm font-semibold text-teal-900">
-                            {profile.remedy}
-                          </h4>
-                          <p className="text-[11px] font-medium text-slate-500">
-                            {t('Thermal:', 'তাপ প্রবণতা:')} {profile.thermal[language]} ·{' '}
-                            {t('Potency:', 'শক্তি:')} {profile.typicalPotencies}
-                          </p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => setRemedyFilter(profile.remedy)}
-                          className="text-xs font-medium text-teal-800 hover:underline cursor-pointer whitespace-nowrap shrink-0"
-                        >
-                          {t('Filter Rubrics', 'রুব্রিক ফিল্টার')}
-                        </button>
-                      </div>
-
-                      <p className="text-xs text-slate-700 leading-relaxed">
-                        <span className="font-medium text-slate-800">
-                          {t('Sphere:', 'কার্যক্ষেত্র:')}
-                        </span>{' '}
-                        {profile.sphere[language]}
-                      </p>
-                      <p className="text-xs text-slate-700 leading-relaxed">
-                        <span className="font-medium text-slate-800">
-                          {t('Mental Keynote:', 'মানসিক লক্ষণ:')}
-                        </span>{' '}
-                        {profile.mentalKeynote[language]}
-                      </p>
-                      <p className="text-xs text-slate-600 leading-relaxed">
-                        <span className="font-medium text-slate-700">
-                          {t('Modalities:', 'হ্রাস-বৃদ্ধি:')}
-                        </span>{' '}
-                        {profile.modalities[language]}
-                      </p>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            </div>
-
-            <div className="space-y-2.5">
-              <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-500">
-                {t(
-                  'Potency & Repetition Guide',
-                  'পোটেন্সি নির্বাচন ও মাত্রা পুনরাবৃত্তি নির্দেশিকা'
-                )}
-              </h3>
-              <div className="overflow-x-auto border border-slate-200 rounded-lg">
-                <table className="w-full text-left border-collapse text-xs">
-                  <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 uppercase tracking-wide text-[11px]">
-                      <th className="py-2.5 px-4 font-semibold w-44">
-                        {t('Potency Scale', 'পোটেন্সি মাত্রা')}
-                      </th>
-                      <th className="py-2.5 px-4 font-semibold">
-                        {t('Clinical Indication', 'ক্লিনিক্যাল নির্দেশনা')}
-                      </th>
-                      <th className="py-2.5 px-4 font-semibold">
-                        {t('Repetition Protocol', 'পুনরাবৃত্তি বিধি')}
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-200 bg-white">
-                    {POTENCY_GUIDELINES.map((item) => (
-                      <tr key={item.scale} className="align-top">
-                        <td className="py-3 px-4 font-mono font-semibold text-teal-900 whitespace-nowrap">
-                          {item.scale}
-                        </td>
-                        <td className="py-3 px-4 text-slate-700 leading-relaxed">
-                          {item.indication[language]}
-                        </td>
-                        <td className="py-3 px-4 text-slate-600 leading-relaxed">
-                          {item.repetition[language]}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          </div>
-        )}
-      </section>
 
       {/* Add / Edit Modal */}
       {showModal && (

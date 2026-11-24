@@ -1,10 +1,14 @@
 import type {
+  BillingCycle,
+  ClinicAccentTheme,
   ClinicalNoteFocus,
+  FeeCategory,
   GenderOption,
   PatientStatus,
   PhotoCategory,
   PlanTier,
   RepertoryChapter,
+  SubscriptionStatus,
   ThermalState,
 } from '../types/clinic';
 
@@ -20,6 +24,50 @@ export const STATUS_LABELS_I18N: Record<AppLanguage, Record<PatientStatus, strin
     active: 'সক্রিয়',
     'follow-up': 'ফলো-আপ বাকি',
     archived: 'আর্কাইভড',
+  },
+};
+
+export const SUBSCRIPTION_STATUS_LABELS_I18N: Record<
+  AppLanguage,
+  Record<SubscriptionStatus, string>
+> = {
+  en: {
+    active: 'Active',
+    trial: 'Trial',
+    suspended: 'Suspended',
+  },
+  bn: {
+    active: 'সক্রিয়',
+    trial: 'ট্রায়াল',
+    suspended: 'স্থগিত (Suspended)',
+  },
+};
+
+export const BILLING_CYCLE_LABELS_I18N: Record<AppLanguage, Record<BillingCycle, string>> = {
+  en: {
+    free: 'Free Tier',
+    monthly: 'Monthly',
+    yearly: 'Yearly',
+  },
+  bn: {
+    free: 'ফ্রি টিয়ার',
+    monthly: 'মাসিক',
+    yearly: 'বার্ষিক',
+  },
+};
+
+export const ACCENT_THEME_LABELS_I18N: Record<AppLanguage, Record<ClinicAccentTheme, string>> = {
+  en: {
+    teal: 'Apothecary Teal',
+    indigo: 'Clinical Indigo',
+    emerald: 'Botanical Emerald',
+    slate: 'Executive Slate',
+  },
+  bn: {
+    teal: 'অ্যাপোথেকারি টিল',
+    indigo: 'ক্লিনিক্যাল ইন্ডিগো',
+    emerald: 'বোটানিক্যাল এমারেল্ড',
+    slate: 'এক্সিকিউটিভ স্লেট',
   },
 };
 
@@ -103,6 +151,23 @@ export const NOTE_FOCUS_LABELS_I18N: Record<AppLanguage, Record<ClinicalNoteFocu
     'Mental State': 'মানসিক অবস্থা',
     'Miasm & History': 'মায়াজম ও পূর্ব-ইতিহাস',
     'General Observation': 'সাধারণ পর্যবেক্ষণ',
+  },
+};
+
+export const FEE_CATEGORY_LABELS_I18N: Record<AppLanguage, Record<FeeCategory, string>> = {
+  en: {
+    consultation: 'Consultation Fee',
+    medicine: 'Remedy / Medicine',
+    'follow-up': 'Follow-up Visit',
+    'due-settlement': 'Due Settlement',
+    other: 'Other Clinic Fee',
+  },
+  bn: {
+    consultation: 'কনসাল্টেশন ফি',
+    medicine: 'ওষুধ / রেমেডি',
+    'follow-up': 'ফলো-আপ ভিজিট',
+    'due-settlement': 'বকেয়া পরিশোধ',
+    other: 'অন্যান্য ক্লিনিক ফি',
   },
 };
 

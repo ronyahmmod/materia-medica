@@ -1,10 +1,257 @@
 {
   "entities": {
-    "Patient": {
-      "title": "Patient",
-      "description": "Homeopathic patient clinical record managed exclusively by clinic admin.",
+    "ClinicTenant": {
+      "title": "ClinicTenant",
+      "description": "Multi-tenant SaaS homeopathic clinic profile, branding customization, hosting config, and subscription quotas managed by the Super Admin.",
       "type": "object",
       "properties": {
+        "slug": {
+          "type": "string",
+          "description": "Unique URL-safe clinic identifier used in shareable client URLs",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "clinicName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "practitionerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "ownerEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "accessEmails": {
+          "type": "array",
+          "description": "Bounded list of lowercase emails assigned to this clinic (1 to 10)"
+        },
+        "authorizedUids": {
+          "type": "array",
+          "description": "Bounded list of Firebase Auth UIDs assigned by Super Admin for password sign-in (1 to 10)"
+        },
+        "tagline": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "phone": {
+          "type": "string",
+          "maxLength": 40
+        },
+        "address": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "currencySymbol": {
+          "type": "string",
+          "enum": ["৳", "$", "₹", "€", "£"]
+        },
+        "accentColor": {
+          "type": "string",
+          "enum": ["teal", "indigo", "emerald", "slate"]
+        },
+        "planTier": {
+          "type": "string",
+          "enum": ["free", "growth", "clinic_pro"]
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "enum": ["active", "trial", "suspended"]
+        },
+        "patientLimit": {
+          "type": "number"
+        },
+        "storageLimitMb": {
+          "type": "number"
+        },
+        "hostingProvider": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "monthlyFeeAmount": {
+          "type": "number"
+        },
+        "billingCycle": {
+          "type": "string",
+          "enum": ["free", "monthly", "yearly"]
+        },
+        "subscriptionNotes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "slug",
+        "clinicName",
+        "practitionerName",
+        "ownerEmail",
+        "accessEmails",
+        "authorizedUids",
+        "currencySymbol",
+        "accentColor",
+        "planTier",
+        "subscriptionStatus",
+        "patientLimit",
+        "storageLimitMb",
+        "monthlyFeeAmount",
+        "billingCycle",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ClinicPublicProfile": {
+      "title": "ClinicPublicProfile",
+      "description": "Non-PII public white-label branding document keyed by shareable URL slug for clinic login portals.",
+      "type": "object",
+      "properties": {
+        "clinicId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "slug": {
+          "type": "string",
+          "minLength": 2,
+          "maxLength": 64,
+          "pattern": "^[a-z0-9-]+$"
+        },
+        "clinicName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160
+        },
+        "practitionerName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "tagline": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "accentColor": {
+          "type": "string",
+          "enum": ["teal", "indigo", "emerald", "slate"]
+        },
+        "planTier": {
+          "type": "string",
+          "enum": ["free", "growth", "clinic_pro"]
+        },
+        "subscriptionStatus": {
+          "type": "string",
+          "enum": ["active", "trial", "suspended"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "clinicId",
+        "slug",
+        "clinicName",
+        "practitionerName",
+        "accentColor",
+        "planTier",
+        "subscriptionStatus",
+        "updatedAt"
+      ]
+    },
+    "PlatformHostingConfig": {
+      "title": "PlatformHostingConfig",
+      "description": "SaaS platform hosting target, free-tier deployment settings, and public share URL base managed by Super Admin.",
+      "type": "object",
+      "properties": {
+        "platformName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "supportEmail": {
+          "type": "string",
+          "format": "email",
+          "minLength": 3,
+          "maxLength": 160
+        },
+        "defaultHostingProvider": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "defaultRegion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "publicBaseUrl": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "freeTierSummary": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "maintenanceNotice": {
+          "type": "string",
+          "maxLength": 400
+        },
+        "updatedBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "platformName",
+        "supportEmail",
+        "defaultHostingProvider",
+        "defaultRegion",
+        "updatedBy",
+        "updatedAt"
+      ]
+    },
+    "Patient": {
+      "title": "Patient",
+      "description": "Homeopathic patient clinical record isolated by clinicId.",
+      "type": "object",
+      "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array",
+          "description": "Authorized clinic admin emails mirrored from parent clinic"
+        },
+        "clinicAccessUids": {
+          "type": "array",
+          "description": "Authorized clinic Firebase Auth UIDs mirrored from parent clinic for zero-index list isolation"
+        },
         "caseNumber": {
           "type": "string",
           "description": "Unique clinic case identifier",
@@ -115,6 +362,16 @@
       "description": "Homeopathic case-taking, constitutional evaluation, and remedy prescription log.",
       "type": "object",
       "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
         "patientId": {
           "type": "string",
           "minLength": 1,
@@ -202,9 +459,19 @@
     },
     "PatientPhoto": {
       "title": "PatientPhoto",
-      "description": "Metadata for clinical and patient photos stored on the free-tier upload server.",
+      "description": "Metadata for clinical and patient photos stored on the upload server.",
       "type": "object",
       "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
         "patientId": {
           "type": "string",
           "minLength": 1,
@@ -263,7 +530,7 @@
     },
     "ClinicSettings": {
       "title": "ClinicSettings",
-      "description": "Clinic profile, free-tier quota limits, and subscription plan selection.",
+      "description": "Legacy single-clinic profile and quota document.",
       "type": "object",
       "properties": {
         "clinicName": {
@@ -316,7 +583,7 @@
     },
     "AdminUser": {
       "title": "AdminUser",
-      "description": "Authorized practitioner admin accounts permitted to access patient records.",
+      "description": "Legacy practitioner admin registry.",
       "type": "object",
       "properties": {
         "email": {
@@ -343,9 +610,19 @@
     },
     "RepertoryEntry": {
       "title": "RepertoryEntry",
-      "description": "Common homeopathic symptom rubric and associated remedies stored by clinic admin for quick clinical reference.",
+      "description": "Homeopathic symptom rubric and associated remedies stored per clinic.",
       "type": "object",
       "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
         "chapter": {
           "type": "string",
           "enum": [
@@ -414,6 +691,16 @@
       "description": "Dated, unstructured clinical observations about the patient's constitution and mental state.",
       "type": "object",
       "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
         "patientId": {
           "type": "string",
           "minLength": 1,
@@ -462,36 +749,175 @@
         "createdAt",
         "updatedAt"
       ]
+    },
+    "FeeRecord": {
+      "title": "FeeRecord",
+      "description": "Cash-only patient fee collection and balance calculation record isolated per clinic.",
+      "type": "object",
+      "properties": {
+        "clinicId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "clinicAccessEmails": {
+          "type": "array"
+        },
+        "clinicAccessUids": {
+          "type": "array"
+        },
+        "patientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "patientName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "caseNumber": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 32,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "consultationId": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "collectedDate": {
+          "type": "string",
+          "minLength": 4,
+          "maxLength": 32
+        },
+        "feeType": {
+          "type": "string",
+          "enum": ["consultation", "medicine", "follow-up", "due-settlement", "other"]
+        },
+        "feeAmount": {
+          "type": "number",
+          "description": "Gross fee charged before discount"
+        },
+        "discountAmount": {
+          "type": "number",
+          "description": "Discount deducted from gross fee"
+        },
+        "netAmount": {
+          "type": "number",
+          "description": "Net payable amount (feeAmount - discountAmount)"
+        },
+        "cashPaid": {
+          "type": "number",
+          "description": "Cash amount collected from the patient"
+        },
+        "dueAmount": {
+          "type": "number",
+          "description": "Remaining balance due (netAmount - cashPaid)"
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "createdBy": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "patientId",
+        "patientName",
+        "caseNumber",
+        "collectedDate",
+        "feeType",
+        "feeAmount",
+        "discountAmount",
+        "netAmount",
+        "cashPaid",
+        "dueAmount",
+        "createdBy",
+        "createdAt",
+        "updatedAt"
+      ]
     }
   },
   "firestore": {
+    "/clinics/{clinicId}": {
+      "schema": { "$ref": "#/entities/ClinicTenant" },
+      "description": "Multi-tenant client clinics with customization, hosting config, and subscription quotas managed by Super Admin."
+    },
+    "/clinic_public/{slug}": {
+      "schema": { "$ref": "#/entities/ClinicPublicProfile" },
+      "description": "Non-PII public white-label storefront metadata keyed by URL slug."
+    },
+    "/platform_config/{configId}": {
+      "schema": { "$ref": "#/entities/PlatformHostingConfig" },
+      "description": "Global SaaS hosting configuration and free-tier metadata managed by Super Admin."
+    },
+    "/clinics/{clinicId}/patients/{patientId}": {
+      "schema": { "$ref": "#/entities/Patient" },
+      "description": "Tenant-isolated homeopathic patient profiles."
+    },
+    "/clinics/{clinicId}/patients/{patientId}/consultations/{consultationId}": {
+      "schema": { "$ref": "#/entities/Consultation" },
+      "description": "Tenant-isolated homeopathic consultations and prescriptions."
+    },
+    "/clinics/{clinicId}/patients/{patientId}/photos/{photoId}": {
+      "schema": { "$ref": "#/entities/PatientPhoto" },
+      "description": "Tenant-isolated clinical and portrait photo metadata."
+    },
+    "/clinics/{clinicId}/patients/{patientId}/clinical_notes/{noteId}": {
+      "schema": { "$ref": "#/entities/ClinicalNote" },
+      "description": "Tenant-isolated dated observations on patient constitution and mental state."
+    },
+    "/clinics/{clinicId}/fee_records/{feeId}": {
+      "schema": { "$ref": "#/entities/FeeRecord" },
+      "description": "Tenant-isolated cash-only fee collections and due balance records."
+    },
+    "/clinics/{clinicId}/repertory_entries/{entryId}": {
+      "schema": { "$ref": "#/entities/RepertoryEntry" },
+      "description": "Tenant-isolated homeopathic repertory rubrics and remedy references."
+    },
     "/patients/{patientId}": {
       "schema": { "$ref": "#/entities/Patient" },
-      "description": "Admin-managed homeopathic patient profiles."
+      "description": "Legacy single-clinic patient profiles accessible to Super Admin for continuity/migration."
     },
     "/patients/{patientId}/consultations/{consultationId}": {
       "schema": { "$ref": "#/entities/Consultation" },
-      "description": "Chronological homeopathic consultations and prescriptions for a patient."
+      "description": "Legacy single-clinic consultations accessible to Super Admin."
     },
     "/patients/{patientId}/photos/{photoId}": {
       "schema": { "$ref": "#/entities/PatientPhoto" },
-      "description": "Clinical and portrait photo metadata linked to the free-tier photo server."
+      "description": "Legacy single-clinic photo metadata accessible to Super Admin."
     },
     "/patients/{patientId}/clinical_notes/{noteId}": {
       "schema": { "$ref": "#/entities/ClinicalNote" },
-      "description": "Dated unstructured observations on patient constitution and mental state."
+      "description": "Legacy single-clinic clinical notes accessible to Super Admin."
+    },
+    "/fee_records/{feeId}": {
+      "schema": { "$ref": "#/entities/FeeRecord" },
+      "description": "Legacy single-clinic cash fee records accessible to Super Admin."
     },
     "/repertory_entries/{entryId}": {
       "schema": { "$ref": "#/entities/RepertoryEntry" },
-      "description": "Admin-curated homeopathic repertory rubrics and remedy references."
+      "description": "Legacy single-clinic repertory entries accessible to Super Admin."
     },
     "/clinic_settings/{settingId}": {
       "schema": { "$ref": "#/entities/ClinicSettings" },
-      "description": "Clinic practice settings and free-tier vs subscription quota configuration."
+      "description": "Legacy single-clinic settings document."
     },
     "/admins/{adminId}": {
       "schema": { "$ref": "#/entities/AdminUser" },
-      "description": "Authorized clinic admin registry."
+      "description": "Legacy clinic admin registry."
     }
   }
 }

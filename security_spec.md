@@ -1,21 +1,30 @@
-# Security Specification — Homeopathy Clinic Admin System
+# Security Specification — Tightened Multi-Tenant Homeopathy SaaS Platform
 
 ## Data Invariants
-1. **Admin-Only Isolation**: Customers/patients never access the application. Every read, list, create, update, and delete on `/patients`, `/consultations`, `/photos`, `/clinic_settings`, and `/admins` requires a verified Firebase Auth token (`request.auth.token.email_verified == true`) belonging to the primary clinic admin (`rony.jib@gmail.com`) or an admin registered in `/admins/{uid}` by the primary owner.
-2. **Master Gate Relational Integrity**: No `/consultations/{consultationId}` or `/photos/{photoId}` document can exist without a parent `/patients/{patientId}` document, and `incoming().patientId` must match `{patientId}`.
-3. **Immutable Ownership & Temporal Integrity**: `createdBy` and `createdAt` cannot be altered after creation; `createdAt` and `updatedAt` must equal `request.time`.
-4. **Strict Schema & Bounds Enforcement**: Every string enforces `size()` limits, arrays (`photoIds`) enforce `size() <= 10`, and unknown/ghost fields are blocked via `keys().hasOnly(...)` and `affectedKeys().hasOnly(...)`.
+1. **Strict Role & Provider Separation**:
+   - **Super Admin (`rony.jib@gmail.com`)**: Must authenticate via verified `google.com` provider (`email_verified == true`). Only Super Admin may create, customize, suspend, or delete `/clinics/{clinicId}`, `/clinic_public/{slug}`, and `/platform_config/{configId}`, or access legacy root collections.
+   - **Client Clinic Admins**: Must authenticate exclusively via Super-Admin-provisioned **Email & Password** (`sign_in_provider == 'password'`). Google login is disabled on client portals and rejected by both Firestore rules and Express API routes for non-Super-Admin users.
+2. **Cryptographic UID + Email Binding (Anti-Pre-Hijack Guard)**:
+   - Every clinic stores `authorizedUids` (1–10 Firebase Auth UIDs created/assigned by the Super Admin) alongside `accessEmails`.
+   - Every tenant clinical record mirrors `clinicAccessUids` and `clinicAccessEmails` from its parent `/clinics/{clinicId}` document.
+   - An attacker who self-registers via client Auth endpoints receives an untrusted UID not in `authorizedUids` and is rejected.
+3. **Zero-PII Public Storefront**: `/clinic_public/{slug}` exposes single-document `get` (never unauthenticated `list`) with non-PII branding fields only (`clinicId`, `slug`, `clinicName`, `practitionerName`, `tagline`, `accentColor`, `planTier`, `subscriptionStatus`).
+4. **Master Gate & Active Subscription Enforcement**:
+   - Tenant subcollection reads (`get`) and all writes require an existing parent `/clinics/{clinicId}` with `subscriptionStatus != 'suspended'` for client users.
+   - `consultations`, `photos`, `clinical_notes`, and `fee_records` require an existing parent `/clinics/{clinicId}/patients/{patientId}` document.
+5. **Immutable Ownership & Temporal Integrity**: `createdBy`, `createdAt`, `clinicId`, and `patientId` cannot be altered after creation; `createdAt` and `updatedAt` must equal `request.time`.
+6. **Strict Schema & Cash Accounting Invariants**: All strings enforce `size()` bounds, arrays enforce `size() <= 10` (`accessEmails`, `authorizedUids`, `photoIds`), cash fee invariants enforce `netAmount == feeAmount - discountAmount` and `dueAmount == netAmount - cashPaid`, and ghost fields are rejected via `keys().hasOnly(...)` and `affectedKeys().hasOnly(...)`.
 
 ## Dirty Dozen Adversarial Payloads
-1. **Unauthenticated Patient Read**: Anonymous/unauthenticated `get` on `/patients/pat-1` -> `PERMISSION_DENIED`.
-2. **Unverified Email Spoof**: Signed-in user with `email: "rony.jib@gmail.com"` and `email_verified: false` -> `PERMISSION_DENIED`.
-3. **Non-Admin Customer Access**: Signed-in patient/external user (`email: "patient@example.com"`, `email_verified: true`) attempting `list` or `get` on `/patients` -> `PERMISSION_DENIED`.
-4. **Self-Assigned Admin Escalation**: Non-owner user attempting `create` on `/admins/{uid}` -> `PERMISSION_DENIED`.
-5. **Ghost Field Injection (Shadow Update)**: Admin sending `{ ...validPatient, isSuperAdmin: true }` -> `PERMISSION_DENIED`.
-6. **Path ID Poisoning**: Document ID containing spaces/slashes or >128 chars (`/patients/bad id!`) -> `PERMISSION_DENIED`.
-7. **Orphaned Consultation Write**: Creating `/patients/nonexistent/consultations/c1` -> `PERMISSION_DENIED`.
-8. **Parent Mismatch**: Creating `/patients/pat-1/consultations/c1` with `patientId: "pat-2"` -> `PERMISSION_DENIED`.
-9. **Client Timestamp Forgery**: Creating a patient with `createdAt: Timestamp(2020-01-01)` instead of `serverTimestamp()` -> `PERMISSION_DENIED`.
-10. **Immutable Owner Tampering**: Updating a patient's `createdBy` or `createdAt` -> `PERMISSION_DENIED`.
-11. **Unbounded Array / Resource Exhaustion**: Sending `photoIds` with 25 items or `chiefComplaint` > 500 chars -> `PERMISSION_DENIED`.
-12. **Photo Size Spoofing**: Registering photo metadata with `sizeBytes: 50000000` (50 MB) or invalid `mimeType: "text/html"` -> `PERMISSION_DENIED`.
+1. **Unauthenticated Patient Read**: Anonymous `get` on `/clinics/c1/patients/pat-1` -> `PERMISSION_DENIED`.
+2. **Client Google Login Attempt**: External Google user (`sign_in_provider == 'google.com'`, not Super Admin) attempting to `list` or `get` `/clinics/c1` -> `PERMISSION_DENIED`.
+3. **Self-Signup Pre-Hijack Attack**: Attacker signing up via email/password and attempting to `get` or `list` `/clinics/c1` -> `PERMISSION_DENIED` (`request.auth.uid` absent from `authorizedUids` / `clinicAccessUids`).
+4. **Cross-Tenant Lateral Access**: Password client of Clinic A attempting `list`, `get`, or `create` on `/clinics/clinicB/patients` -> `PERMISSION_DENIED`.
+5. **Client Self-Promotion / Subscription Bypass**: Client attempting `update` on `/clinics/clinicA` to raise `patientLimit` or reactivate a `suspended` clinic -> `PERMISSION_DENIED`.
+6. **Suspended Clinic Access & Mutation**: Client of a `suspended` clinic attempting to `get`, `create`, or `update` a patient or fee record -> `PERMISSION_DENIED`.
+7. **Tenant ACL Forgery**: Client attempting to create `/clinics/clinicA/patients/p1` with forged `clinicAccessUids: ['attackerUid']` -> `PERMISSION_DENIED`.
+8. **Ghost Field Injection**: Sending `{ ...validClinic, superAdminOverride: true }` -> `PERMISSION_DENIED`.
+9. **Path ID / Slug Poisoning**: Creating `/clinic_public/Bad Slug!` or `/clinics/bad id/patients/p1` -> `PERMISSION_DENIED`.
+10. **Orphaned Subcollection Write**: Creating `/clinics/c1/patients/nonexistent/consultations/con1` -> `PERMISSION_DENIED`.
+11. **Cash Math Tampering**: Creating a `FeeRecord` with `feeAmount: 500, discountAmount: 0, cashPaid: 200, dueAmount: 0` -> `PERMISSION_DENIED`.
+12. **Client Timestamp Forgery**: Creating a clinic or patient with `createdAt: Timestamp(2020-01-01)` -> `PERMISSION_DENIED`.

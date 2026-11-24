@@ -1,19 +1,19 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
-  collection,
   deleteDoc,
-  doc,
   onSnapshot,
-  orderBy,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
+  where,
 } from 'firebase/firestore';
 import {
   ArrowLeft,
+  Banknote,
   Calendar,
   Camera,
+  CheckCircle2,
   Compass,
   Edit3,
   FileText,
@@ -24,15 +24,28 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { formatCashAmount, roundAmount, summarizeFees } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { deleteServerPhoto, uploadClinicalPhoto } from '../lib/photoApi';
 import {
   fetchNoteRepertorySuggestions,
   type NoteRepertorySuggestion,
 } from '../lib/repertoryApi';
+import {
+  ACCENT_THEME_PALETTES,
+  tenantConsultationDoc,
+  tenantConsultationsCol,
+  tenantFeeDoc,
+  tenantNoteDoc,
+  tenantNotesCol,
+  tenantPatientDoc,
+  tenantPhotoDoc,
+  tenantPhotosCol,
+} from '../lib/tenantPaths';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  FEE_CATEGORY_LABELS_I18N,
   GENDER_LABELS_I18N,
   NOTE_FOCUS_LABELS_I18N,
   PHOTO_CATEGORY_LABELS_I18N,
@@ -44,7 +57,9 @@ import {
   FIELD_LIMITS,
   type ClinicalNote,
   type ClinicalNoteFocus,
+  type ClinicTenant,
   type Consultation,
+  type FeeRecord,
   type Patient,
   type PatientPhoto,
   type PatientStatus,
@@ -52,13 +67,15 @@ import {
 } from '../types/clinic';
 import { ConsultationFormModal } from './ConsultationFormModal';
 import { ConstitutionalMapperCard } from './ConstitutionalMapperCard';
+import { FeeEntryModal } from './FeeEntryModal';
 import { PatientCasePrintView } from './PatientCasePrintView';
 import { SecureClinicalImage } from './SecureClinicalImage';
 
 interface PatientDetailViewProps {
+  clinic: ClinicTenant;
+  isSuperAdmin: boolean;
   patient: Patient;
-  clinicName?: string;
-  practitionerName?: string;
+  feeRecords: FeeRecord[];
   onBack: () => void;
   onEditPatient: (patient: Patient) => void;
   onDeletedPatient: () => void;
@@ -66,29 +83,38 @@ interface PatientDetailViewProps {
 }
 
 export function PatientDetailView({
+  clinic,
+  isSuperAdmin,
   patient,
-  clinicName,
-  practitionerName,
+  feeRecords,
   onBack,
   onEditPatient,
   onDeletedPatient,
   onPhotoStorageChanged,
 }: PatientDetailViewProps) {
   const { language, t } = useLanguage();
+  const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
   const statusLabels = STATUS_LABELS_I18N[language];
   const photoCategoryLabels = PHOTO_CATEGORY_LABELS_I18N[language];
   const noteFocusLabels = NOTE_FOCUS_LABELS_I18N[language];
+  const feeCategoryLabels = FEE_CATEGORY_LABELS_I18N[language];
   const thermalLabels = THERMAL_LABELS_I18N[language];
   const genderLabels = GENDER_LABELS_I18N[language];
   const [consultations, setConsultations] = useState<Consultation[]>([]);
   const [clinicalNotes, setClinicalNotes] = useState<ClinicalNote[]>([]);
   const [photos, setPhotos] = useState<PatientPhoto[]>([]);
   const [loadingSubdata, setLoadingSubdata] = useState(true);
-  const [activeTab, setActiveTab] = useState<'consultations' | 'notes' | 'mapper' | 'photos'>(
-    'consultations'
-  );
+  const [activeTab, setActiveTab] = useState<
+    'consultations' | 'notes' | 'mapper' | 'photos' | 'fees'
+  >('consultations');
 
   const [showConsultationModal, setShowConsultationModal] = useState(false);
+  const [showFeeModal, setShowFeeModal] = useState(false);
+  const [editingFee, setEditingFee] = useState<FeeRecord | null>(null);
+  const [settlingFeeId, setSettlingFeeId] = useState<string | null>(null);
+  const [settleAmountInput, setSettleAmountInput] = useState('');
+  const [savingSettle, setSavingSettle] = useState(false);
+  const [confirmDeleteFeeId, setConfirmDeleteFeeId] = useState<string | null>(null);
   const [showPrintView, setShowPrintView] = useState(false);
   const [lightboxPhoto, setLightboxPhoto] = useState<PatientPhoto | null>(null);
   const [uploadCategory, setUploadCategory] = useState<PhotoCategory>('symptom');
@@ -123,15 +149,39 @@ export function PatientDetailView({
 
   useEffect(() => {
     setLoadingSubdata(true);
-    const consPath = `patients/${patient.id}/consultations`;
-    const photosPath = `patients/${patient.id}/photos`;
+    const consPath = `clinics/${clinic.id}/patients/${patient.id}/consultations`;
+    const photosPath = `clinics/${clinic.id}/patients/${patient.id}/photos`;
+    const notesPath = `clinics/${clinic.id}/patients/${patient.id}/clinical_notes`;
+    const userUid = auth.currentUser?.uid || '';
+
+    const consSource = isSuperAdmin
+      ? tenantConsultationsCol(clinic.id, patient.id)
+      : query(
+          tenantConsultationsCol(clinic.id, patient.id),
+          where('clinicAccessUids', 'array-contains', userUid)
+        );
+    const photosSource = isSuperAdmin
+      ? tenantPhotosCol(clinic.id, patient.id)
+      : query(
+          tenantPhotosCol(clinic.id, patient.id),
+          where('clinicAccessUids', 'array-contains', userUid)
+        );
+    const notesSource = isSuperAdmin
+      ? tenantNotesCol(clinic.id, patient.id)
+      : query(
+          tenantNotesCol(clinic.id, patient.id),
+          where('clinicAccessUids', 'array-contains', userUid)
+        );
 
     const unsubCons = onSnapshot(
-      query(collection(db, 'patients', patient.id, 'consultations'), orderBy('visitDate', 'desc')),
+      consSource,
       (snapshot) => {
-        setConsultations(
-          snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<Consultation, 'id'>) }))
-        );
+        const rows = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<Consultation, 'id'>),
+        }));
+        rows.sort((a, b) => (b.visitDate || '').localeCompare(a.visitDate || ''));
+        setConsultations(rows);
         setLoadingSubdata(false);
       },
       (error) => {
@@ -140,24 +190,29 @@ export function PatientDetailView({
     );
 
     const unsubPhotos = onSnapshot(
-      query(collection(db, 'patients', patient.id, 'photos'), orderBy('createdAt', 'desc')),
+      photosSource,
       (snapshot) => {
-        setPhotos(
-          snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<PatientPhoto, 'id'>) }))
-        );
+        const rows = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<PatientPhoto, 'id'>),
+        }));
+        rows.sort((a, b) => (b.createdAt?.toMillis?.() ?? 0) - (a.createdAt?.toMillis?.() ?? 0));
+        setPhotos(rows);
       },
       (error) => {
         handleFirestoreError(error, OperationType.LIST, photosPath);
       }
     );
 
-    const notesPath = `patients/${patient.id}/clinical_notes`;
     const unsubNotes = onSnapshot(
-      query(collection(db, 'patients', patient.id, 'clinical_notes'), orderBy('observedDate', 'desc')),
+      notesSource,
       (snapshot) => {
-        setClinicalNotes(
-          snapshot.docs.map((d) => ({ id: d.id, ...(d.data() as Omit<ClinicalNote, 'id'>) }))
-        );
+        const rows = snapshot.docs.map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<ClinicalNote, 'id'>),
+        }));
+        rows.sort((a, b) => (b.observedDate || '').localeCompare(a.observedDate || ''));
+        setClinicalNotes(rows);
       },
       (error) => {
         handleFirestoreError(error, OperationType.LIST, notesPath);
@@ -169,7 +224,7 @@ export function PatientDetailView({
       unsubPhotos();
       unsubNotes();
     };
-  }, [patient.id]);
+  }, [clinic.id, isSuperAdmin, patient.id]);
 
   useEffect(() => {
     setNoteSuggestions([]);
@@ -246,12 +301,12 @@ export function PatientDetailView({
   const handleStatusChange = async (newStatus: PatientStatus) => {
     setActionError(null);
     try {
-      await updateDoc(doc(db, 'patients', patient.id), {
+      await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
         status: newStatus,
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `patients/${patient.id}`);
+      handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/patients/${patient.id}`);
     }
   };
 
@@ -266,10 +321,13 @@ export function PatientDetailView({
     setActionError(null);
     try {
       const compressed = await compressClinicalImage(file, 1200, 0.78);
-      const uploaded = await uploadClinicalPhoto(patient.id, compressed.dataBase64);
+      const uploaded = await uploadClinicalPhoto(patient.id, compressed.dataBase64, clinic.id);
       const photoDocId = `pho_${uploaded.photoId.slice(0, 24)}`;
 
-      await setDoc(doc(db, 'patients', patient.id, 'photos', photoDocId), {
+      await setDoc(tenantPhotoDoc(clinic.id, patient.id, photoDocId), {
+        clinicId: clinic.id,
+        clinicAccessEmails: clinic.accessEmails,
+        clinicAccessUids: clinic.authorizedUids || [],
         patientId: patient.id,
         fileName: uploaded.fileName,
         url: uploaded.url,
@@ -285,7 +343,7 @@ export function PatientDetailView({
       });
 
       if (uploadCategory === 'portrait') {
-        await updateDoc(doc(db, 'patients', patient.id), {
+        await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
           portraitUrl: uploaded.url,
           portraitPhotoId: photoDocId,
           updatedAt: serverTimestamp(),
@@ -309,10 +367,10 @@ export function PatientDetailView({
   const handleDeletePhoto = async (photo: PatientPhoto) => {
     setActionError(null);
     try {
-      await deleteServerPhoto(patient.id, photo.fileName);
-      await deleteDoc(doc(db, 'patients', patient.id, 'photos', photo.id));
+      await deleteServerPhoto(patient.id, photo.fileName, photo.url, clinic.id);
+      await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id));
       if (patient.portraitPhotoId === photo.id) {
-        await updateDoc(doc(db, 'patients', patient.id), {
+        await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
           portraitUrl: '',
           portraitPhotoId: '',
           updatedAt: serverTimestamp(),
@@ -327,7 +385,7 @@ export function PatientDetailView({
         handleFirestoreError(
           error,
           OperationType.DELETE,
-          `patients/${patient.id}/photos/${photo.id}`
+          `clinics/${clinic.id}/patients/${patient.id}/photos/${photo.id}`
         );
       }
       setActionError(
@@ -341,12 +399,12 @@ export function PatientDetailView({
   const handleDeleteConsultation = async (consultationId: string) => {
     setActionError(null);
     try {
-      await deleteDoc(doc(db, 'patients', patient.id, 'consultations', consultationId));
+      await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId));
     } catch (error) {
       handleFirestoreError(
         error,
         OperationType.DELETE,
-        `patients/${patient.id}/consultations/${consultationId}`
+        `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`
       );
     }
   };
@@ -367,11 +425,14 @@ export function PatientDetailView({
     if (!uid) return;
 
     const noteId = `note_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const path = `patients/${patient.id}/clinical_notes/${noteId}`;
+    const path = `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`;
 
     setSavingNote(true);
     try {
-      await setDoc(doc(db, 'patients', patient.id, 'clinical_notes', noteId), {
+      await setDoc(tenantNoteDoc(clinic.id, patient.id, noteId), {
+        clinicId: clinic.id,
+        clinicAccessEmails: clinic.accessEmails,
+        clinicAccessUids: clinic.authorizedUids || [],
         patientId: patient.id,
         observedDate: noteDate.slice(0, 32),
         focusArea: noteFocus,
@@ -415,9 +476,9 @@ export function PatientDetailView({
       );
       return;
     }
-    const path = `patients/${patient.id}/clinical_notes/${note.id}`;
+    const path = `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${note.id}`;
     try {
-      await updateDoc(doc(db, 'patients', patient.id, 'clinical_notes', note.id), {
+      await updateDoc(tenantNoteDoc(clinic.id, patient.id, note.id), {
         observedDate: editNoteDate.slice(0, 32),
         focusArea: editNoteFocus,
         content: trimmed.slice(0, FIELD_LIMITS.clinicalObservationMax),
@@ -439,13 +500,13 @@ export function PatientDetailView({
   const handleDeleteClinicalNote = async (noteId: string) => {
     setActionError(null);
     try {
-      await deleteDoc(doc(db, 'patients', patient.id, 'clinical_notes', noteId));
+      await deleteDoc(tenantNoteDoc(clinic.id, patient.id, noteId));
       setConfirmDeleteNoteId(null);
     } catch (error) {
       handleFirestoreError(
         error,
         OperationType.DELETE,
-        `patients/${patient.id}/clinical_notes/${noteId}`
+        `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`
       );
     }
   };
@@ -471,11 +532,14 @@ export function PatientDetailView({
     }
 
     const noteId = `note_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const path = `patients/${patient.id}/clinical_notes/${noteId}`;
+    const path = `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`;
     const todayDate = new Date().toISOString().slice(0, 10);
 
     try {
-      await setDoc(doc(db, 'patients', patient.id, 'clinical_notes', noteId), {
+      await setDoc(tenantNoteDoc(clinic.id, patient.id, noteId), {
+        clinicId: clinic.id,
+        clinicAccessEmails: clinic.accessEmails,
+        clinicAccessUids: clinic.authorizedUids || [],
         patientId: patient.id,
         observedDate: todayDate,
         focusArea: 'Constitution' as ClinicalNoteFocus,
@@ -497,26 +561,92 @@ export function PatientDetailView({
     return clinicalNotes.filter((n) => n.focusArea === noteFilter);
   }, [clinicalNotes, noteFilter]);
 
+  const patientFeeSummary = useMemo(() => summarizeFees(feeRecords), [feeRecords]);
+
+  const handleConfirmSettleFee = async (rec: FeeRecord) => {
+    setActionError(null);
+    const addCash = roundAmount(Number(settleAmountInput));
+    if (!Number.isFinite(addCash) || addCash <= 0) {
+      setActionError(
+        t('Enter a valid cash amount greater than 0.', '০ এর বেশি একটি সঠিক নগদ টাকা লিখুন।')
+      );
+      return;
+    }
+    if (addCash > rec.dueAmount) {
+      setActionError(
+        t(
+          'Collected cash cannot exceed the remaining due amount.',
+          'আদায় করা নগদ টাকা বকেয়ার চেয়ে বেশি হতে পারবে না।'
+        )
+      );
+      return;
+    }
+    const newCashPaid = roundAmount(rec.cashPaid + addCash);
+    const newDueAmount = Math.max(0, roundAmount(rec.netAmount - newCashPaid));
+
+    setSavingSettle(true);
+    try {
+      await updateDoc(tenantFeeDoc(clinic.id, rec.id), {
+        cashPaid: newCashPaid,
+        dueAmount: newDueAmount,
+        updatedAt: serverTimestamp(),
+      });
+      setSettlingFeeId(null);
+      setSettleAmountInput('');
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${rec.id}`);
+      }
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to record cash settlement.', 'বকেয়া নগদ আদায় সংরক্ষণ করা যায়নি।')
+      );
+    } finally {
+      setSavingSettle(false);
+    }
+  };
+
+  const handleDeleteFeeRecord = async (feeId: string) => {
+    setActionError(null);
+    try {
+      await deleteDoc(tenantFeeDoc(clinic.id, feeId));
+      setConfirmDeleteFeeId(null);
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
+        handleFirestoreError(error, OperationType.DELETE, `clinics/${clinic.id}/fee_records/${feeId}`);
+      }
+      setActionError(
+        error instanceof Error
+          ? error.message
+          : t('Unable to delete cash fee entry.', 'নগদ ফি রেকর্ড মুছে ফেলা যায়নি।')
+      );
+    }
+  };
+
   const handleDeleteFullPatient = async () => {
     setDeletingPatient(true);
     setActionError(null);
     try {
       for (const photo of photos) {
-        await deleteServerPhoto(patient.id, photo.fileName);
-        await deleteDoc(doc(db, 'patients', patient.id, 'photos', photo.id));
+        await deleteServerPhoto(patient.id, photo.fileName, photo.url, clinic.id);
+        await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id));
       }
       for (const con of consultations) {
-        await deleteDoc(doc(db, 'patients', patient.id, 'consultations', con.id));
+        await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, con.id));
       }
       for (const note of clinicalNotes) {
-        await deleteDoc(doc(db, 'patients', patient.id, 'clinical_notes', note.id));
+        await deleteDoc(tenantNoteDoc(clinic.id, patient.id, note.id));
       }
-      await deleteDoc(doc(db, 'patients', patient.id));
+      for (const fee of feeRecords) {
+        await deleteDoc(tenantFeeDoc(clinic.id, fee.id));
+      }
+      await deleteDoc(tenantPatientDoc(clinic.id, patient.id));
       onPhotoStorageChanged();
       onDeletedPatient();
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.DELETE, `patients/${patient.id}`);
+        handleFirestoreError(error, OperationType.DELETE, `clinics/${clinic.id}/patients/${patient.id}`);
       }
       setActionError(
         error instanceof Error
@@ -567,7 +697,7 @@ export function PatientDetailView({
             <button
               type="button"
               onClick={() => setShowConsultationModal(true)}
-              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
             >
               <Plus className="w-3.5 h-3.5" />
               {t('Log Consultation', 'ভিজিট লিপিবদ্ধ করুন')}
@@ -638,6 +768,27 @@ export function PatientDetailView({
                   {t('Next follow-up:', 'পরবর্তী ফলো-আপ:')}{' '}
                   <span className="text-slate-800 font-medium">{patient.nextFollowUpDate}</span>
                 </p>
+              )}
+              {feeRecords.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('fees')}
+                  className="text-slate-600 hover:text-teal-800 cursor-pointer"
+                >
+                  {t('Cash Paid:', 'নগদ জমা:')}{' '}
+                  <span className="font-mono font-semibold text-emerald-700">
+                    {formatCashAmount(patientFeeSummary.totalCashCollected)}
+                  </span>
+                  {patientFeeSummary.totalDue > 0 && (
+                    <>
+                      {' · '}
+                      {t('Due:', 'বকেয়া:')}{' '}
+                      <span className="font-mono font-semibold text-amber-700">
+                        {formatCashAmount(patientFeeSummary.totalDue)}
+                      </span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
           </div>
@@ -727,6 +878,18 @@ export function PatientDetailView({
             }`}
           >
             {t('Clinical Photo Gallery', 'ক্লিনিক্যাল ছবির গ্যালারি')} ({photos.length})
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('fees')}
+            className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap tabular-nums ${
+              activeTab === 'fees'
+                ? 'bg-white text-slate-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Banknote className="w-3.5 h-3.5 text-teal-700" />
+            {t('Cash Fees', 'নগদ ফি')} ({feeRecords.length})
           </button>
         </div>
 
@@ -1333,6 +1496,240 @@ export function PatientDetailView({
           consultations={consultations}
           onSaveSynthesisNote={handleSaveMappedNote}
         />
+          ) : activeTab === 'fees' ? (
+        <section aria-label={t('Cash Fees', 'নগদ ফি')} className="space-y-5">
+          {/* Patient Cash Fee Summary & Header */}
+          <div className="bg-white border border-slate-200 rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <h2 className="font-display text-base font-semibold text-slate-900">
+                {t('Patient Cash Fee Account', 'রোগীর নগদ ফি হিসাব')}
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5 flex items-center gap-1.5">
+                <Banknote className="w-3.5 h-3.5 text-teal-700" />
+                <span>
+                  {t(
+                    'Cash-only collection history, discounts, and remaining balance calculation.',
+                    'শুধুমাত্র নগদ ফি সংগ্রহ, ছাড় ও বকেয়া হিসাব।'
+                  )}
+                </span>
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setEditingFee(null);
+                setShowFeeModal(true);
+              }}
+              className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              {t('Record Cash Fee', 'নগদ ফি যোগ করুন')}
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 tabular-nums">
+            <div className="bg-white border border-slate-200 rounded-xl p-4">
+              <p className="text-xs text-slate-500">{t('Total Billed', 'মোট বিল')}</p>
+              <p className="font-mono text-lg font-semibold text-slate-900 mt-1">
+                {formatCashAmount(patientFeeSummary.totalBilled)}
+              </p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-4">
+              <p className="text-xs text-slate-500">{t('Total Discount', 'মোট ছাড়')}</p>
+              <p className="font-mono text-lg font-semibold text-slate-700 mt-1">
+                {formatCashAmount(patientFeeSummary.totalDiscount)}
+              </p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-4">
+              <p className="text-xs text-slate-500">{t('Cash Collected', 'মোট নগদ জমা')}</p>
+              <p className="font-mono text-lg font-semibold text-emerald-700 mt-1">
+                {formatCashAmount(patientFeeSummary.totalCashCollected)}
+              </p>
+            </div>
+            <div className="bg-white border border-slate-200 rounded-xl p-4">
+              <p className="text-xs text-slate-500">{t('Remaining Due', 'মোট বকেয়া')}</p>
+              <p
+                className={`font-mono text-lg font-semibold mt-1 ${
+                  patientFeeSummary.totalDue > 0 ? 'text-amber-700' : 'text-slate-900'
+                }`}
+              >
+                {formatCashAmount(patientFeeSummary.totalDue)}
+              </p>
+            </div>
+          </div>
+
+          {feeRecords.length === 0 ? (
+            <div className="bg-white border border-slate-200 rounded-xl p-10 text-center">
+              <Banknote className="w-6 h-6 text-slate-400 mx-auto mb-2.5" />
+              <h3 className="font-display text-base font-semibold text-slate-900">
+                {t('No cash fees recorded for this patient', 'এই রোগীর কোনো নগদ ফি রেকর্ড নেই')}
+              </h3>
+              <p className="text-xs text-slate-500 mt-1 mb-5 max-w-sm mx-auto">
+                {t(
+                  'Record consultation or medicine fees collected in cash to calculate net payable and due balance.',
+                  'নগদ কনসাল্টেশন বা ওষুধের ফি লিপিবদ্ধ করে নিট হিসাব ও বকেয়া পরিচালনা করুন।'
+                )}
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setEditingFee(null);
+                  setShowFeeModal(true);
+                }}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                {t('Record First Cash Fee', 'প্রথম নগদ ফি যোগ করুন')}
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500">
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Date', 'তারিখ')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap">{t('Category', 'ধরন')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Fee', 'ফি')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Discount', 'ছাড়')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Net', 'নিট')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Cash Paid', 'নগদ জমা')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Due', 'বকেয়া')}</th>
+                      <th className="py-3 px-4 whitespace-nowrap text-right">{t('Actions', 'কার্যক্রম')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 text-xs tabular-nums">
+                    {feeRecords.map((rec) => {
+                      const isSettling = settlingFeeId === rec.id;
+                      const isDeleting = confirmDeleteFeeId === rec.id;
+                      return (
+                        <tr key={rec.id} className="hover:bg-slate-50/70 align-top">
+                          <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
+                            {rec.collectedDate}
+                          </td>
+                          <td className="py-3 px-4">
+                            <p className="font-medium text-slate-800">
+                              {feeCategoryLabels[rec.feeType]}
+                            </p>
+                            <p className="text-[11px] text-slate-500">
+                              {t('Cash Only', 'শুধুমাত্র নগদ')}
+                              {rec.notes ? ` · ${rec.notes}` : ''}
+                            </p>
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-700 whitespace-nowrap">
+                            {formatCashAmount(rec.feeAmount)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono text-slate-500 whitespace-nowrap">
+                            {rec.discountAmount > 0 ? formatCashAmount(rec.discountAmount) : '—'}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-medium text-slate-900 whitespace-nowrap">
+                            {formatCashAmount(rec.netAmount)}
+                          </td>
+                          <td className="py-3 px-4 text-right font-mono font-semibold text-emerald-700 whitespace-nowrap">
+                            {formatCashAmount(rec.cashPaid)}
+                          </td>
+                          <td
+                            className={`py-3 px-4 text-right font-mono font-semibold whitespace-nowrap ${
+                              rec.dueAmount > 0 ? 'text-amber-700' : 'text-slate-500'
+                            }`}
+                          >
+                            {rec.dueAmount > 0 ? formatCashAmount(rec.dueAmount) : t('Paid', 'পরিশোধ')}
+                          </td>
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            {isSettling ? (
+                              <div className="inline-flex items-center gap-1.5 bg-teal-50 border border-teal-200 rounded-lg p-1">
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={rec.dueAmount}
+                                  step="any"
+                                  value={settleAmountInput}
+                                  onChange={(e) => setSettleAmountInput(e.target.value)}
+                                  className="w-20 px-2 py-1 text-xs font-mono bg-white border border-slate-300 rounded"
+                                />
+                                <button
+                                  type="button"
+                                  disabled={savingSettle}
+                                  onClick={() => handleConfirmSettleFee(rec)}
+                                  className="px-2 py-1 text-[11px] font-medium text-white bg-teal-700 rounded hover:bg-teal-800 cursor-pointer"
+                                >
+                                  {savingSettle ? '...' : t('Collect', 'জমা')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setSettlingFeeId(null)}
+                                  className="px-1.5 py-1 text-[11px] text-slate-600 cursor-pointer"
+                                >
+                                  {t('Cancel', 'বাতিল')}
+                                </button>
+                              </div>
+                            ) : isDeleting ? (
+                              <div className="inline-flex items-center gap-1.5 bg-red-50 border border-red-200 rounded-lg px-2 py-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteFeeRecord(rec.id)}
+                                  className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-700 rounded hover:bg-red-800 cursor-pointer"
+                                >
+                                  {t('Delete', 'মুছুন')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteFeeId(null)}
+                                  className="px-1.5 py-0.5 text-[11px] text-slate-700 cursor-pointer"
+                                >
+                                  {t('Cancel', 'বাতিল')}
+                                </button>
+                              </div>
+                            ) : (
+                              <div className="inline-flex items-center gap-1">
+                                {rec.dueAmount > 0 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setConfirmDeleteFeeId(null);
+                                      setSettlingFeeId(rec.id);
+                                      setSettleAmountInput(String(rec.dueAmount));
+                                    }}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 rounded hover:bg-teal-100 cursor-pointer"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" />
+                                    {t('Collect Cash', 'আদায়')}
+                                  </button>
+                                )}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingFee(rec);
+                                    setShowFeeModal(true);
+                                  }}
+                                  aria-label={t('Edit cash fee', 'ফি সম্পাদনা করুন')}
+                                  className="p-1.5 text-slate-400 hover:text-slate-900 rounded hover:bg-slate-100 cursor-pointer"
+                                >
+                                  <Edit3 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSettlingFeeId(null);
+                                    setConfirmDeleteFeeId(rec.id);
+                                  }}
+                                  aria-label={t('Delete cash fee', 'ফি মুছুন')}
+                                  className="p-1.5 text-slate-400 hover:text-red-700 rounded hover:bg-slate-100 cursor-pointer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </section>
       ) : (
         <div className="space-y-5">
           {/* Direct Photo Upload Bar */}
@@ -1446,11 +1843,29 @@ export function PatientDetailView({
 
       {showConsultationModal && (
         <ConsultationFormModal
+          clinic={clinic}
           patient={patient}
           onClose={() => setShowConsultationModal(false)}
           onSaved={() => {
             setShowConsultationModal(false);
             onPhotoStorageChanged();
+          }}
+        />
+      )}
+
+      {showFeeModal && (
+        <FeeEntryModal
+          clinic={clinic}
+          patients={[patient]}
+          lockedPatient={patient}
+          existingFee={editingFee}
+          onClose={() => {
+            setShowFeeModal(false);
+            setEditingFee(null);
+          }}
+          onSaved={() => {
+            setShowFeeModal(false);
+            setEditingFee(null);
           }}
         />
       )}
@@ -1495,8 +1910,8 @@ export function PatientDetailView({
           consultations={consultations}
           clinicalNotes={clinicalNotes}
           photos={photos}
-          clinicName={clinicName}
-          practitionerName={practitionerName}
+          clinicName={clinic.clinicName}
+          practitionerName={clinic.practitionerName}
           onClose={() => setShowPrintView(false)}
         />
       )}

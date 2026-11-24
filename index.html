@@ -3,15 +3,19 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Materia Medica Clinic — Homeopathic Patient Management</title>
+    <link rel="icon" type="image/svg+xml" href="/clinic-icon.svg" />
+    <link rel="shortcut icon" href="/clinic-icon.svg" />
+    <link rel="apple-touch-icon" href="/clinic-icon.svg" />
+    <meta name="theme-color" content="#0f766e" />
+    <title>Materia Medica Clinic — Homeopathic Practice Platform</title>
     <meta
       name="description"
-      content="Admin-only homeopathic patient management system with constitutional case-taking, remedy logs, free-tier photo upload server, and clinic capacity scaling."
+      content="Multi-clinic homeopathic patient management system with constitutional case-taking, remedy logs, compressed clinical photo storage, and cash ledger."
     />
-    <meta property="og:title" content="Materia Medica Clinic — Homeopathic Patient Management" />
+    <meta property="og:title" content="Materia Medica Clinic — Homeopathic Practice Platform" />
     <meta
       property="og:description"
-      content="Admin-only homeopathic patient management system with constitutional case-taking, remedy logs, free-tier photo upload server, and clinic capacity scaling."
+      content="Multi-clinic homeopathic patient management system with constitutional case-taking, remedy logs, compressed clinical photo storage, and cash ledger."
     />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
@@ -21,9 +25,21 @@
       href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400..600;1,9..40,400..600&family=JetBrains+Mono:wght@400;500;600&family=Noto+Sans+Bengali:wght@400;500;600;700&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
+    <link rel="stylesheet" href="/src/index.css" />
   </head>
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-teal-700 selection:text-white">
-    <div id="root"></div>
+    <div id="root">
+      <div class="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6">
+        <img
+          src="/clinic-icon.svg"
+          alt="Materia Medica Clinic"
+          width="44"
+          height="44"
+          class="w-11 h-11 rounded-xl border border-slate-200 mb-3 shrink-0"
+        />
+        <p class="text-xs font-medium text-slate-600">Loading clinical workspace...</p>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

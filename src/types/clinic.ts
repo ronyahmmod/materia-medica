@@ -5,6 +5,16 @@ export type ThermalState = 'Chilly' | 'Hot' | 'Ambithermal' | 'Unspecified';
 export type GenderOption = 'Female' | 'Male' | 'Other';
 export type PhotoCategory = 'portrait' | 'symptom' | 'tongue' | 'skin' | 'prescription';
 export type PlanTier = 'free' | 'growth' | 'clinic_pro';
+export type SubscriptionStatus = 'active' | 'trial' | 'suspended';
+export type BillingCycle = 'free' | 'monthly' | 'yearly';
+export type CurrencySymbol = '৳' | '$' | '₹' | '€' | '£';
+export type ClinicAccentTheme = 'teal' | 'indigo' | 'emerald' | 'slate';
+
+export const CURRENCY_OPTIONS: CurrencySymbol[] = ['৳', '$', '₹', '€', '£'];
+export const ACCENT_THEME_OPTIONS: ClinicAccentTheme[] = ['teal', 'indigo', 'emerald', 'slate'];
+export const SUBSCRIPTION_STATUS_OPTIONS: SubscriptionStatus[] = ['active', 'trial', 'suspended'];
+export const BILLING_CYCLE_OPTIONS: BillingCycle[] = ['free', 'monthly', 'yearly'];
+
 export type RepertoryChapter =
   | 'Mind'
   | 'Head & Vertigo'
@@ -39,8 +49,77 @@ export const CLINICAL_NOTE_FOCUS_AREAS: ClinicalNoteFocus[] = [
   'General Observation',
 ];
 
+export type FeeCategory =
+  | 'consultation'
+  | 'medicine'
+  | 'follow-up'
+  | 'due-settlement'
+  | 'other';
+
+export const FEE_CATEGORIES: FeeCategory[] = [
+  'consultation',
+  'medicine',
+  'follow-up',
+  'due-settlement',
+  'other',
+];
+
+export interface ClinicTenant {
+  id: string;
+  slug: string;
+  clinicName: string;
+  practitionerName: string;
+  ownerEmail: string;
+  accessEmails: string[];
+  authorizedUids: string[];
+  tagline?: string;
+  phone?: string;
+  address?: string;
+  currencySymbol: CurrencySymbol;
+  accentColor: ClinicAccentTheme;
+  planTier: PlanTier;
+  subscriptionStatus: SubscriptionStatus;
+  patientLimit: number;
+  storageLimitMb: number;
+  hostingProvider?: string;
+  monthlyFeeAmount: number;
+  billingCycle: BillingCycle;
+  subscriptionNotes?: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface ClinicPublicProfile {
+  clinicId: string;
+  slug: string;
+  clinicName: string;
+  practitionerName: string;
+  tagline?: string;
+  accentColor: ClinicAccentTheme;
+  planTier: PlanTier;
+  subscriptionStatus: SubscriptionStatus;
+  updatedAt: Timestamp;
+}
+
+export interface PlatformHostingConfig {
+  id: string;
+  platformName: string;
+  supportEmail: string;
+  defaultHostingProvider: string;
+  defaultRegion: string;
+  publicBaseUrl?: string;
+  freeTierSummary?: string;
+  maintenanceNotice?: string;
+  updatedBy: string;
+  updatedAt: Timestamp;
+}
+
 export interface Patient {
   id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
   caseNumber: string;
   fullName: string;
   age: number;
@@ -65,6 +144,9 @@ export interface Patient {
 
 export interface Consultation {
   id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
   patientId: string;
   visitDate: string;
   presentingSymptoms: string;
@@ -85,6 +167,9 @@ export interface Consultation {
 
 export interface PatientPhoto {
   id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
   patientId: string;
   fileName: string;
   url: string;
@@ -112,6 +197,9 @@ export interface ClinicSettings {
 
 export interface RepertoryEntry {
   id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
   chapter: RepertoryChapter;
   rubric: string;
   primaryRemedy: string;
@@ -125,10 +213,35 @@ export interface RepertoryEntry {
 
 export interface ClinicalNote {
   id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
   patientId: string;
   observedDate: string;
   focusArea: ClinicalNoteFocus;
   content: string;
+  createdBy: string;
+  createdAt: Timestamp;
+  updatedAt: Timestamp;
+}
+
+export interface FeeRecord {
+  id: string;
+  clinicId?: string;
+  clinicAccessEmails?: string[];
+  clinicAccessUids?: string[];
+  patientId: string;
+  patientName: string;
+  caseNumber: string;
+  consultationId?: string;
+  collectedDate: string;
+  feeType: FeeCategory;
+  feeAmount: number;
+  discountAmount: number;
+  netAmount: number;
+  cashPaid: number;
+  dueAmount: number;
+  notes?: string;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -139,6 +252,7 @@ export interface PlanDefinition {
   name: string;
   audience: string;
   monthlyPriceLabel: string;
+  monthlyPriceUsd: number;
   patientLimit: number;
   storageLimitMb: number;
   databaseTier: string;
@@ -152,6 +266,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanDefinition> = {
     name: 'Starter Free Tier',
     audience: 'For solo homeopaths starting out',
     monthlyPriceLabel: '$0 / month',
+    monthlyPriceUsd: 0,
     patientLimit: 50,
     storageLimitMb: 100,
     databaseTier: 'Firestore Spark (Free Daily Quota)',
@@ -163,6 +278,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanDefinition> = {
     name: 'Growth Practice',
     audience: 'For busy single-doctor clinics',
     monthlyPriceLabel: '$19 / month',
+    monthlyPriceUsd: 19,
     patientLimit: 500,
     storageLimitMb: 5120,
     databaseTier: 'Firestore Blaze Pay-As-You-Go',
@@ -174,6 +290,7 @@ export const PLAN_CATALOG: Record<PlanTier, PlanDefinition> = {
     name: 'Clinic Pro',
     audience: 'For multi-practitioner practices',
     monthlyPriceLabel: '$49 / month',
+    monthlyPriceUsd: 49,
     patientLimit: 10000,
     storageLimitMb: 51200,
     databaseTier: 'Dedicated High-Throughput Firestore',
@@ -183,6 +300,13 @@ export const PLAN_CATALOG: Record<PlanTier, PlanDefinition> = {
 };
 
 export const FIELD_LIMITS = {
+  slugMax: 64,
+  clinicNameMax: 160,
+  practitionerNameMax: 120,
+  taglineMax: 240,
+  hostingProviderMax: 120,
+  subscriptionNotesMax: 500,
+  platformNameMax: 120,
   caseNumberMax: 32,
   fullNameMax: 120,
   phoneMax: 32,
@@ -202,9 +326,12 @@ export const FIELD_LIMITS = {
   rubricMax: 240,
   symptomNotesMax: 1500,
   clinicalObservationMax: 4000,
+  feeNotesMax: 500,
+  feeMaxAmount: 1000000,
 } as const;
 
 export const CASE_NUMBER_REGEX = /^[a-zA-Z0-9_-]+$/;
+export const CLINIC_SLUG_REGEX = /^[a-z0-9-]+$/;
 
 export const COMMON_REMEDIES = [
   'Arsenicum album',

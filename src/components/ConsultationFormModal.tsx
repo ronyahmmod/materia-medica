@@ -1,20 +1,30 @@
-import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
-import { Upload, X } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { Banknote, Calculator, Upload, X } from 'lucide-react';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { computeFeeBreakdown, formatCashAmount } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
+import {
+  ACCENT_THEME_PALETTES,
+  tenantConsultationDoc,
+  tenantFeeDoc,
+  tenantPatientDoc,
+  tenantPhotoDoc,
+} from '../lib/tenantPaths';
 import { useLanguage } from '../i18n/LanguageContext';
 import { PHOTO_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import {
   COMMON_REMEDIES,
   FIELD_LIMITS,
   POTENCY_OPTIONS,
+  type ClinicTenant,
   type Patient,
   type PhotoCategory,
 } from '../types/clinic';
 
 interface ConsultationFormModalProps {
+  clinic: ClinicTenant;
   patient: Patient;
   onClose: () => void;
   onSaved: () => void;
@@ -30,11 +40,14 @@ interface PendingAttachment {
 }
 
 export function ConsultationFormModal({
+  clinic,
   patient,
   onClose,
   onSaved,
 }: ConsultationFormModalProps) {
   const { language, t } = useLanguage();
+  const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
+  const currency = clinic.currencySymbol || '৳';
   const photoCategoryLabels = PHOTO_CATEGORY_LABELS_I18N[language];
   const todayStr = new Date().toISOString().slice(0, 10);
 
@@ -54,8 +67,34 @@ export function ConsultationFormModal({
 
   const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
   const [selectedCategory, setSelectedCategory] = useState<PhotoCategory>('symptom');
+  const [feeInput, setFeeInput] = useState('');
+  const [discountInput, setDiscountInput] = useState('');
+  const [cashPaidInput, setCashPaidInput] = useState('');
+  const [cashManuallyEdited, setCashManuallyEdited] = useState(false);
+  const [feeNotes, setFeeNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  const feeBreakdown = useMemo(
+    () => computeFeeBreakdown(feeInput, discountInput, cashPaidInput),
+    [feeInput, discountInput, cashPaidInput]
+  );
+
+  const handleFeeInputChange = (val: string) => {
+    setFeeInput(val);
+    if (!cashManuallyEdited) {
+      const next = computeFeeBreakdown(val, discountInput, val);
+      setCashPaidInput(next.netAmount > 0 ? String(next.netAmount) : '');
+    }
+  };
+
+  const handleDiscountInputChange = (val: string) => {
+    setDiscountInput(val);
+    if (!cashManuallyEdited) {
+      const next = computeFeeBreakdown(feeInput, val, feeInput);
+      setCashPaidInput(next.netAmount > 0 ? String(next.netAmount) : '');
+    }
+  };
 
   const handleAttachPhoto = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
@@ -113,6 +152,28 @@ export function ConsultationFormModal({
       return;
     }
 
+    const rawFeeNum = Number(feeInput || 0);
+    const rawDiscountNum = Number(discountInput || 0);
+    const rawCashNum = Number(cashPaidInput || 0);
+    if (rawFeeNum > 0 && rawDiscountNum > feeBreakdown.feeAmount) {
+      setErrorMsg(
+        t(
+          'Fee discount cannot exceed total fee amount.',
+          'ফি-এর ছাড় মোট ফি-এর চেয়ে বেশি হতে পারবে না।'
+        )
+      );
+      return;
+    }
+    if (rawFeeNum > 0 && rawCashNum > feeBreakdown.netAmount) {
+      setErrorMsg(
+        t(
+          'Cash collected cannot exceed the net payable fee.',
+          'আদায় করা নগদ টাকা নিট প্রদেয় ফি-এর চেয়ে বেশি হতে পারবে না।'
+        )
+      );
+      return;
+    }
+
     const uid = auth.currentUser?.uid;
     if (!uid) {
       setErrorMsg(
@@ -126,15 +187,18 @@ export function ConsultationFormModal({
 
     setSubmitting(true);
     const consultationId = `con_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const path = `patients/${patient.id}/consultations/${consultationId}`;
+    const path = `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`;
 
     try {
       const uploadedPhotoIds: string[] = [];
 
       for (const att of attachments) {
-        const uploaded = await uploadClinicalPhoto(patient.id, att.dataBase64);
+        const uploaded = await uploadClinicalPhoto(patient.id, att.dataBase64, clinic.id);
         const photoDocId = `pho_${uploaded.photoId.slice(0, 24)}`;
-        await setDoc(doc(db, 'patients', patient.id, 'photos', photoDocId), {
+        await setDoc(tenantPhotoDoc(clinic.id, patient.id, photoDocId), {
+          clinicId: clinic.id,
+          clinicAccessEmails: clinic.accessEmails,
+          clinicAccessUids: clinic.authorizedUids || [],
           patientId: patient.id,
           fileName: uploaded.fileName,
           url: uploaded.url,
@@ -150,6 +214,9 @@ export function ConsultationFormModal({
       }
 
       const payload: Record<string, unknown> = {
+        clinicId: clinic.id,
+        clinicAccessEmails: clinic.accessEmails,
+        clinicAccessUids: clinic.authorizedUids || [],
         patientId: patient.id,
         visitDate: visitDate.slice(0, 32),
         presentingSymptoms: presentingSymptoms.trim().slice(0, FIELD_LIMITS.presentingSymptomsMax),
@@ -183,7 +250,7 @@ export function ConsultationFormModal({
         payload.photoIds = uploadedPhotoIds;
       }
 
-      await setDoc(doc(db, 'patients', patient.id, 'consultations', consultationId), payload);
+      await setDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId), payload);
 
       const patientUpdate: Record<string, unknown> = {
         status: nextFollowUpDate ? 'follow-up' : 'active',
@@ -197,7 +264,38 @@ export function ConsultationFormModal({
         patientUpdate.nextFollowUpDate = patient.nextFollowUpDate;
       }
 
-      await updateDoc(doc(db, 'patients', patient.id), patientUpdate);
+      await updateDoc(tenantPatientDoc(clinic.id, patient.id), patientUpdate);
+
+      if (feeBreakdown.feeAmount > 0) {
+        const feeId = `fee_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
+        const resolvedNote = (
+          feeNotes.trim() || `${remedyName.trim()} ${potency.trim()}`
+        ).slice(0, FIELD_LIMITS.feeNotesMax);
+        const feePayload: Record<string, unknown> = {
+          clinicId: clinic.id,
+          clinicAccessEmails: clinic.accessEmails,
+          clinicAccessUids: clinic.authorizedUids || [],
+          patientId: patient.id,
+          patientName: patient.fullName.slice(0, FIELD_LIMITS.fullNameMax),
+          caseNumber: patient.caseNumber.slice(0, FIELD_LIMITS.caseNumberMax),
+          consultationId,
+          collectedDate: visitDate.slice(0, 32),
+          feeType: 'consultation',
+          feeAmount: feeBreakdown.feeAmount,
+          discountAmount: feeBreakdown.discountAmount,
+          netAmount: feeBreakdown.netAmount,
+          cashPaid: feeBreakdown.cashPaid,
+          dueAmount: feeBreakdown.dueAmount,
+          createdBy: uid,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        };
+        if (resolvedNote) {
+          feePayload.notes = resolvedNote;
+        }
+        await setDoc(tenantFeeDoc(clinic.id, feeId), feePayload);
+      }
+
       onSaved();
     } catch (error) {
       if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
@@ -508,6 +606,127 @@ export function ConsultationFormModal({
             )}
           </div>
 
+          {/* Cash-Only Fee Collection & Calculation */}
+          <div className="border border-slate-200 rounded-lg p-4 bg-slate-50/70 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <Calculator className="w-3.5 h-3.5 text-teal-700" />
+                <p className="text-xs font-semibold text-slate-800">
+                  {t(
+                    'Consultation Cash Fee (Optional)',
+                    'কনসাল্টেশন নগদ ফি হিসাব (ঐচ্ছিক)'
+                  )}
+                </p>
+              </div>
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium text-teal-800 bg-teal-50 border border-teal-200 px-2 py-0.5 rounded-md">
+                <Banknote className="w-3 h-3" />
+                {t('Cash Only', 'শুধুমাত্র নগদ')}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div>
+                <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                  {t(`Fee Amount (${currency})`, `ফি পরিমাণ (${currency})`)}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={FIELD_LIMITS.feeMaxAmount}
+                  step="any"
+                  value={feeInput}
+                  onChange={(e) => handleFeeInputChange(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-medium text-slate-700 mb-1">
+                  {t(`Discount (${currency})`, `ছাড় (${currency})`)}
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  max={feeBreakdown.feeAmount || FIELD_LIMITS.feeMaxAmount}
+                  step="any"
+                  value={discountInput}
+                  onChange={(e) => handleDiscountInputChange(e.target.value)}
+                  placeholder="0"
+                  className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-medium text-slate-700">
+                    {t(`Cash Paid (${currency})`, `নগদ জমা (${currency})`)}
+                  </label>
+                  {feeBreakdown.netAmount > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setCashManuallyEdited(true);
+                        setCashPaidInput(String(feeBreakdown.netAmount));
+                      }}
+                      className={`text-[10px] font-medium hover:underline cursor-pointer ${palette.accentText}`}
+                    >
+                      {t('Full Cash', 'সম্পূর্ণ নগদ')}
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={feeBreakdown.netAmount || FIELD_LIMITS.feeMaxAmount}
+                  step="any"
+                  value={cashPaidInput}
+                  onChange={(e) => {
+                    setCashManuallyEdited(true);
+                    setCashPaidInput(e.target.value);
+                  }}
+                  placeholder="0"
+                  className="w-full px-3 py-1.5 text-xs font-mono tabular-nums bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+            </div>
+
+            {feeBreakdown.feeAmount > 0 && (
+              <div className="pt-2.5 border-t border-slate-200 flex flex-wrap items-center justify-between gap-3 text-xs tabular-nums">
+                <div className="flex flex-wrap items-center gap-4">
+                  <span className="text-slate-600">
+                    {t('Net:', 'নিট:')}{' '}
+                    <strong className="font-mono text-slate-900">
+                      {formatCashAmount(feeBreakdown.netAmount, currency)}
+                    </strong>
+                  </span>
+                  <span className="text-slate-600">
+                    {t('Cash:', 'নগদ:')}{' '}
+                    <strong className="font-mono text-emerald-700">
+                      {formatCashAmount(feeBreakdown.cashPaid, currency)}
+                    </strong>
+                  </span>
+                  <span className="text-slate-600">
+                    {t('Due:', 'বকেয়া:')}{' '}
+                    <strong
+                      className={`font-mono ${
+                        feeBreakdown.dueAmount > 0 ? 'text-amber-700' : 'text-slate-700'
+                      }`}
+                    >
+                      {formatCashAmount(feeBreakdown.dueAmount, currency)}
+                    </strong>
+                  </span>
+                </div>
+                <input
+                  type="text"
+                  maxLength={FIELD_LIMITS.feeNotesMax}
+                  value={feeNotes}
+                  onChange={(e) => setFeeNotes(e.target.value)}
+                  placeholder={t('Fee note (optional)', 'ফি নোট (ঐচ্ছিক)')}
+                  className="px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-md w-full sm:w-52 focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                />
+              </div>
+            )}
+          </div>
+
           {errorMsg && (
             <p className="text-xs text-red-700 font-medium" role="alert">
               {errorMsg}
@@ -525,7 +744,7 @@ export function ConsultationFormModal({
             <button
               type="submit"
               disabled={submitting}
-              className="px-5 py-2 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+              className={`px-5 py-2 text-sm font-medium rounded-lg disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
             >
               {submitting
                 ? t('Recording Visit...', 'ভিজিট সংরক্ষণ হচ্ছে...')

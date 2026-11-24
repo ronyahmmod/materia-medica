@@ -1,4 +1,5 @@
 import { auth } from '../firebase';
+import { buildApiUrl, getActiveClinicHeaderId } from './tenantPaths';
 import type { ClinicalNote, Consultation, Patient } from '../types/clinic';
 
 export type ConstitutionalThemeCategory =
@@ -37,12 +38,14 @@ export async function mapPatientConstitutionalThemes(
   }
 
   const token = await user.getIdToken();
+  const clinicId = getActiveClinicHeaderId();
 
-  const response = await fetch('/api/patients/constitutional-map', {
+  const response = await fetch(buildApiUrl('/api/patients/constitutional-map'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      ...(clinicId ? { 'x-clinic-id': clinicId } : {}),
     },
     body: JSON.stringify({
       patientContext: {

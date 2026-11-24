@@ -1,9 +1,14 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
-import { doc, serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { Upload, X, AlertCircle } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
+import {
+  ACCENT_THEME_PALETTES,
+  tenantPatientDoc,
+  tenantPhotoDoc,
+} from '../lib/tenantPaths';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   GENDER_LABELS_I18N,
@@ -13,6 +18,7 @@ import {
 import {
   CASE_NUMBER_REGEX,
   FIELD_LIMITS,
+  type ClinicTenant,
   type GenderOption,
   type Patient,
   type PatientStatus,
@@ -20,6 +26,7 @@ import {
 } from '../types/clinic';
 
 interface PatientFormModalProps {
+  clinic: ClinicTenant;
   existingPatient?: Patient | null;
   nextSuggestedCaseNumber: string;
   currentPatientCount: number;
@@ -34,6 +41,7 @@ function generateId(): string {
 }
 
 export function PatientFormModal({
+  clinic,
   existingPatient,
   nextSuggestedCaseNumber,
   currentPatientCount,
@@ -42,6 +50,7 @@ export function PatientFormModal({
   onSaved,
   onOpenPlans,
 }: PatientFormModalProps) {
+  const palette = ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
   const { language, t } = useLanguage();
   const genderLabels = GENDER_LABELS_I18N[language];
   const thermalLabels = THERMAL_LABELS_I18N[language];
@@ -147,7 +156,7 @@ export function PatientFormModal({
 
     setSubmitting(true);
     const patientId = existingPatient?.id || generateId();
-    const path = `patients/${patientId}`;
+    const path = `clinics/${clinic.id}/patients/${patientId}`;
 
     try {
       let portraitUrl = existingPatient?.portraitUrl;
@@ -184,20 +193,24 @@ export function PatientFormModal({
         if (portraitPhotoId) basePayload.portraitPhotoId = portraitPhotoId;
         if (existingPatient.lastVisitDate) basePayload.lastVisitDate = existingPatient.lastVisitDate;
         if (existingPatient.lastRemedy) basePayload.lastRemedy = existingPatient.lastRemedy;
-        basePayload.createdBy = existingPatient.createdBy;
-        basePayload.createdAt = existingPatient.createdAt;
 
-        await updateDoc(doc(db, 'patients', patientId), basePayload);
+        await updateDoc(tenantPatientDoc(clinic.id, patientId), basePayload);
       } else {
+        basePayload.clinicId = clinic.id;
+        basePayload.clinicAccessEmails = clinic.accessEmails;
+        basePayload.clinicAccessUids = clinic.authorizedUids || [];
         basePayload.createdBy = uid;
         basePayload.createdAt = serverTimestamp();
-        await setDoc(doc(db, 'patients', patientId), basePayload);
+        await setDoc(tenantPatientDoc(clinic.id, patientId), basePayload);
       }
 
       if (pendingPhoto) {
-        const uploaded = await uploadClinicalPhoto(patientId, pendingPhoto.dataBase64);
+        const uploaded = await uploadClinicalPhoto(patientId, pendingPhoto.dataBase64, clinic.id);
         const photoDocId = `pho_${uploaded.photoId.slice(0, 24)}`;
-        await setDoc(doc(db, 'patients', patientId, 'photos', photoDocId), {
+        await setDoc(tenantPhotoDoc(clinic.id, patientId, photoDocId), {
+          clinicId: clinic.id,
+          clinicAccessEmails: clinic.accessEmails,
+          clinicAccessUids: clinic.authorizedUids || [],
           patientId,
           fileName: uploaded.fileName,
           url: uploaded.url,
@@ -212,7 +225,7 @@ export function PatientFormModal({
         portraitUrl = uploaded.url;
         portraitPhotoId = photoDocId;
 
-        await updateDoc(doc(db, 'patients', patientId), {
+        await updateDoc(tenantPatientDoc(clinic.id, patientId), {
           portraitUrl,
           portraitPhotoId,
           updatedAt: serverTimestamp(),
@@ -285,7 +298,7 @@ export function PatientFormModal({
             <button
               type="button"
               onClick={onOpenPlans}
-              className="px-3 py-1.5 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors shrink-0 cursor-pointer whitespace-nowrap"
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors shrink-0 cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
             >
               {t('View Plans', 'প্ল্যান দেখুন')}
             </button>
@@ -572,7 +585,7 @@ export function PatientFormModal({
             <button
               type="submit"
               disabled={submitting || atFreeLimit}
-              className="px-5 py-2 text-sm font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+              className={`px-5 py-2 text-sm font-medium rounded-lg disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
             >
               {submitting
                 ? t('Saving Record...', 'রেকর্ড সংরক্ষণ হচ্ছে...')

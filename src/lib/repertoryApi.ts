@@ -1,4 +1,5 @@
 import { auth } from '../firebase';
+import { buildApiUrl, getActiveClinicHeaderId } from './tenantPaths';
 import { REPERTORY_CHAPTERS, type RepertoryChapter, type RepertoryEntry } from '../types/clinic';
 
 export type RemedySeverityGrade = 1 | 2 | 3;
@@ -267,6 +268,7 @@ export async function runRepertoryQuickSearch(
   }
 
   const token = await user.getIdToken();
+  const clinicId = getActiveClinicHeaderId();
   const compactEntries = savedEntries.slice(0, 40).map((entry) => ({
     id: entry.id,
     chapter: entry.chapter,
@@ -275,12 +277,13 @@ export async function runRepertoryQuickSearch(
   }));
 
   const payload = await fetchApiJsonWithRetry(
-    '/api/repertory/quick-search',
+    buildApiUrl('/api/repertory/quick-search'),
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...(clinicId ? { 'x-clinic-id': clinicId } : {}),
       },
       body: JSON.stringify({
         query: queryText,
@@ -322,13 +325,15 @@ export async function compareHomeopathicRemedies(
   }
 
   const token = await user.getIdToken();
+  const clinicId = getActiveClinicHeaderId();
   const payload = await fetchApiJsonWithRetry(
-    '/api/repertory/compare',
+    buildApiUrl('/api/repertory/compare'),
     {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
+        ...(clinicId ? { 'x-clinic-id': clinicId } : {}),
       },
       body: JSON.stringify({
         remedyA,
@@ -405,11 +410,13 @@ export async function fetchNoteRepertorySuggestions(
   }
 
   const token = await user.getIdToken();
-  const response = await fetch('/api/repertory/note-suggestions', {
+  const clinicId = getActiveClinicHeaderId();
+  const response = await fetch(buildApiUrl('/api/repertory/note-suggestions'), {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
+      ...(clinicId ? { 'x-clinic-id': clinicId } : {}),
     },
     signal,
     body: JSON.stringify({

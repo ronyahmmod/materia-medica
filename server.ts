@@ -6,15 +6,30 @@ import { GoogleGenAI, ThinkingLevel, Type } from '@google/genai';
 import { getApp, getApps, initializeApp, type App as FirebaseAdminApp } from 'firebase-admin/app';
 import { getAuth, type DecodedIdToken } from 'firebase-admin/auth';
 import dotenv from 'dotenv';
+import {
+  buildLegacyObjectKey,
+  buildTenantObjectKey,
+  deleteObjectFromB2,
+  downloadBufferFromB2,
+  getB2BucketNameForHealth,
+  getB2PerClinicBreakdown,
+  getB2StorageStats,
+  isB2Configured,
+  uploadBufferToB2,
+} from './server/b2Storage';
 
 dotenv.config();
 
 interface FirebaseAppletConfig {
   projectId?: string;
+  firestoreDatabaseId?: string;
 }
 
 interface AuthenticatedRequest extends Request {
   adminUser?: DecodedIdToken;
+  isSuperAdmin?: boolean;
+  clinicId?: string;
+  storageLimitMb?: number;
 }
 
 const PORT = Number(process.env.PORT) || 3000;
@@ -36,28 +51,28 @@ const REPERTORY_CHAPTERS = [
 
 fs.mkdirSync(UPLOAD_ROOT, { recursive: true });
 
-function loadFirebaseProjectId(): string | null {
+function loadFirebaseAppletConfig(): FirebaseAppletConfig {
   const configPath = path.resolve(ROOT_DIR, 'firebase-applet-config.json');
-  if (!fs.existsSync(configPath)) return null;
+  if (!fs.existsSync(configPath)) return {};
   try {
     const raw = fs.readFileSync(configPath, 'utf-8');
     const parsed = JSON.parse(raw) as FirebaseAppletConfig;
     if (!parsed.projectId || parsed.projectId === 'remixed-project-id') {
-      return null;
+      return {};
     }
-    return parsed.projectId;
+    return parsed;
   } catch {
-    return null;
+    return {};
   }
 }
 
 function getAdminApp(): FirebaseAdminApp | null {
-  const projectId = loadFirebaseProjectId();
+  const { projectId } = loadFirebaseAppletConfig();
   if (!projectId) return null;
   return getApps().length ? getApp() : initializeApp({ projectId });
 }
 
-function getAllowedAdminEmails(): Set<string> {
+function getAllowedSuperAdminEmails(): Set<string> {
   const raw = process.env.ADMIN_EMAILS || 'rony.jib@gmail.com';
   return new Set(
     raw
@@ -67,44 +82,247 @@ function getAllowedAdminEmails(): Set<string> {
   );
 }
 
-async function requireAdmin(
+interface CachedClinicMembership {
+  expiresAt: number;
+  subscriptionStatus: string;
+  storageLimitMb: number;
+}
+
+const clinicMembershipCache = new Map<string, CachedClinicMembership>();
+const CLINIC_MEMBERSHIP_TTL_MS = 15_000;
+
+function extractStringArrayField(
+  field?: { arrayValue?: { values?: Array<{ stringValue?: string }> } }
+): string[] {
+  const values = field?.arrayValue?.values;
+  if (!Array.isArray(values)) return [];
+  return values
+    .map((v) => (typeof v?.stringValue === 'string' ? v.stringValue.trim() : ''))
+    .filter(Boolean);
+}
+
+async function verifyClinicMembershipViaUserToken(
+  token: string,
+  clinicId: string,
+  uid: string,
+  email: string
+): Promise<{ allowed: boolean; suspended?: boolean; storageLimitMb?: number; reason?: string }> {
+  const cacheKey = `${clinicId}:${uid}:${email}`;
+  const cached = clinicMembershipCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    if (cached.subscriptionStatus === 'suspended') {
+      return {
+        allowed: false,
+        suspended: true,
+        reason: 'This clinic subscription is currently suspended. Please contact the platform administrator.',
+      };
+    }
+    return { allowed: true, storageLimitMb: cached.storageLimitMb };
+  }
+
+  const { projectId, firestoreDatabaseId } = loadFirebaseAppletConfig();
+  if (!projectId) {
+    return { allowed: false, reason: 'Firebase project is not configured on the server.' };
+  }
+  const dbId = firestoreDatabaseId || '(default)';
+  const endpoint = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/databases/${encodeURIComponent(dbId)}/documents/clinics/${encodeURIComponent(clinicId)}`;
+
+  try {
+    const resp = await fetch(endpoint, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    if (!resp.ok) {
+      return {
+        allowed: false,
+        reason: 'You do not have access to this clinic workspace.',
+      };
+    }
+
+    const docJson = (await resp.json()) as {
+      fields?: Record<
+        string,
+        {
+          stringValue?: string;
+          integerValue?: string;
+          doubleValue?: number;
+          arrayValue?: { values?: Array<{ stringValue?: string }> };
+        }
+      >;
+    };
+    const fields = docJson.fields || {};
+    const authorizedUids = extractStringArrayField(fields.authorizedUids);
+    const accessEmails = extractStringArrayField(fields.accessEmails).map((e) => e.toLowerCase());
+    if (!authorizedUids.includes(uid) || !accessEmails.includes(email.toLowerCase())) {
+      return {
+        allowed: false,
+        reason: 'Your assigned account credentials do not match this clinic.',
+      };
+    }
+
+    const status = fields.subscriptionStatus?.stringValue || 'active';
+    const rawLimit =
+      fields.storageLimitMb?.doubleValue ??
+      (fields.storageLimitMb?.integerValue ? Number(fields.storageLimitMb.integerValue) : 100);
+    const storageLimitMb = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 100;
+
+    clinicMembershipCache.set(cacheKey, {
+      expiresAt: Date.now() + CLINIC_MEMBERSHIP_TTL_MS,
+      subscriptionStatus: status,
+      storageLimitMb,
+    });
+
+    if (status === 'suspended') {
+      return {
+        allowed: false,
+        suspended: true,
+        reason: 'This clinic subscription is currently suspended. Please contact the platform administrator.',
+      };
+    }
+
+    return { allowed: true, storageLimitMb };
+  } catch {
+    return {
+      allowed: false,
+      reason: 'Unable to verify clinic subscription permissions.',
+    };
+  }
+}
+
+async function authenticateBearerUser(
   req: AuthenticatedRequest,
-  res: Response,
-  next: NextFunction
-): Promise<void> {
+  res: Response
+): Promise<{
+  decoded: DecodedIdToken;
+  token: string;
+  uid: string;
+  email: string;
+  signInProvider: string;
+} | null> {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
     res.status(401).json({ error: 'Missing bearer authorization token.' });
-    return;
+    return null;
   }
 
   const token = authHeader.slice(7).trim();
   if (!token) {
     res.status(401).json({ error: 'Empty authorization token.' });
-    return;
+    return null;
   }
 
   const adminApp = getAdminApp();
   if (!adminApp) {
     res.status(500).json({ error: 'Firebase project is not configured on the server.' });
-    return;
+    return null;
   }
 
   try {
     const decoded = await getAuth(adminApp).verifyIdToken(token);
     const email = (decoded.email || '').toLowerCase();
-    const allowedEmails = getAllowedAdminEmails();
-
-    if (!decoded.email_verified || !email || !allowedEmails.has(email)) {
-      res.status(401).json({ error: 'Admin privileges required for clinical storage access.' });
-      return;
+    const uid = decoded.uid || '';
+    const signInProvider = decoded.firebase?.sign_in_provider || '';
+    if (!uid || !email) {
+      res.status(401).json({ error: 'Authenticated user credentials required.' });
+      return null;
     }
-
-    req.adminUser = decoded;
-    next();
+    return { decoded, token, uid, email, signInProvider };
   } catch {
     res.status(401).json({ error: 'Invalid or expired authentication token.' });
+    return null;
   }
+}
+
+function isVerifiedSuperAdminToken(verified: {
+  decoded: DecodedIdToken;
+  email: string;
+  signInProvider: string;
+}): boolean {
+  return (
+    verified.signInProvider === 'google.com' &&
+    verified.decoded.email_verified === true &&
+    getAllowedSuperAdminEmails().has(verified.email)
+  );
+}
+
+async function requireSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const verified = await authenticateBearerUser(req, res);
+  if (!verified) return;
+
+  if (!isVerifiedSuperAdminToken(verified)) {
+    res.status(401).json({ error: 'Super Admin privileges required.' });
+    return;
+  }
+
+  req.adminUser = verified.decoded;
+  req.isSuperAdmin = true;
+  next();
+}
+
+async function requireClinicOrSuperAdmin(
+  req: AuthenticatedRequest,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  const verified = await authenticateBearerUser(req, res);
+  if (!verified) return;
+
+  const isSuperAdmin = isVerifiedSuperAdminToken(verified);
+  const rawClinicId =
+    (typeof req.params?.clinicId === 'string' ? req.params.clinicId : '') ||
+    (typeof req.headers['x-clinic-id'] === 'string' ? req.headers['x-clinic-id'] : '') ||
+    (typeof req.query?.clinicId === 'string' ? req.query.clinicId : '') ||
+    (typeof (req.body as { clinicId?: unknown } | undefined)?.clinicId === 'string'
+      ? ((req.body as { clinicId?: string }).clinicId || '')
+      : '');
+  const trimmedClinicId = rawClinicId.trim();
+
+  if (isSuperAdmin) {
+    if (trimmedClinicId && !SAFE_ID_REGEX.test(trimmedClinicId)) {
+      res.status(400).json({ error: 'Invalid clinicId parameter.' });
+      return;
+    }
+    req.adminUser = verified.decoded;
+    req.isSuperAdmin = true;
+    req.clinicId = trimmedClinicId || 'default';
+    next();
+    return;
+  }
+
+  if (verified.signInProvider !== 'password') {
+    res.status(401).json({
+      error: 'Client access requires assigned email and password authentication.',
+    });
+    return;
+  }
+
+  if (!trimmedClinicId || !SAFE_ID_REGEX.test(trimmedClinicId)) {
+    res.status(401).json({ error: 'Active clinic workspace identifier is required.' });
+    return;
+  }
+
+  const membership = await verifyClinicMembershipViaUserToken(
+    verified.token,
+    trimmedClinicId,
+    verified.uid,
+    verified.email
+  );
+  if (!membership.allowed) {
+    res.status(401).json({ error: membership.reason || 'Clinic access denied.' });
+    return;
+  }
+
+  req.adminUser = verified.decoded;
+  req.isSuperAdmin = false;
+  req.clinicId = trimmedClinicId;
+  req.storageLimitMb = membership.storageLimitMb;
+  next();
 }
 
 function detectImageType(buffer: Buffer): { mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; ext: 'jpg' | 'png' | 'webp' } | null {
@@ -153,18 +371,33 @@ function resolveConfinedPath(patientId: string, fileName?: string): string | nul
   return targetPath;
 }
 
-function computeStorageStats(): { totalFiles: number; totalBytes: number } {
-  if (!fs.existsSync(UPLOAD_ROOT)) {
+function resolveTenantPhotoPath(clinicId: string, patientId: string, fileName?: string): string | null {
+  if (!SAFE_ID_REGEX.test(clinicId) || !SAFE_ID_REGEX.test(patientId)) return null;
+  const clinicDir = path.resolve(UPLOAD_ROOT, `tenant_${clinicId}`);
+  if (!clinicDir.startsWith(UPLOAD_ROOT + path.sep)) return null;
+  const patientDir = path.resolve(clinicDir, patientId);
+  if (!patientDir.startsWith(clinicDir + path.sep)) return null;
+
+  if (!fileName) return patientDir;
+  if (!SAFE_FILENAME_REGEX.test(fileName)) return null;
+
+  const targetPath = path.resolve(patientDir, fileName);
+  if (!targetPath.startsWith(patientDir + path.sep)) return null;
+  return targetPath;
+}
+
+function walkStorageDir(dirPath: string): { totalFiles: number; totalBytes: number } {
+  if (!fs.existsSync(dirPath)) {
     return { totalFiles: 0, totalBytes: 0 };
   }
 
   let totalFiles = 0;
   let totalBytes = 0;
 
-  const walk = (dirPath: string): void => {
-    const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+  const walk = (currentDir: string): void => {
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true });
     for (const entry of entries) {
-      const fullPath = path.resolve(dirPath, entry.name);
+      const fullPath = path.resolve(currentDir, entry.name);
       if (!fullPath.startsWith(UPLOAD_ROOT + path.sep)) continue;
       if (entry.isDirectory()) {
         walk(fullPath);
@@ -176,15 +409,140 @@ function computeStorageStats(): { totalFiles: number; totalBytes: number } {
     }
   };
 
-  walk(UPLOAD_ROOT);
+  walk(dirPath);
   return { totalFiles, totalBytes };
+}
+
+function computeLocalStorageStats(clinicId?: string): { totalFiles: number; totalBytes: number } {
+  if (!clinicId || clinicId === 'all') {
+    return walkStorageDir(UPLOAD_ROOT);
+  }
+  if (!SAFE_ID_REGEX.test(clinicId)) {
+    return { totalFiles: 0, totalBytes: 0 };
+  }
+  const tenantDir = path.resolve(UPLOAD_ROOT, `tenant_${clinicId}`);
+  if (!tenantDir.startsWith(UPLOAD_ROOT + path.sep)) {
+    return { totalFiles: 0, totalBytes: 0 };
+  }
+  return walkStorageDir(tenantDir);
+}
+
+function computeLocalPerClinicStorageBreakdown(): {
+  totalFiles: number;
+  totalBytes: number;
+  byClinic: Record<string, { totalFiles: number; totalBytes: number }>;
+  legacyStats: { totalFiles: number; totalBytes: number };
+} {
+  if (!fs.existsSync(UPLOAD_ROOT)) {
+    return {
+      totalFiles: 0,
+      totalBytes: 0,
+      byClinic: {},
+      legacyStats: { totalFiles: 0, totalBytes: 0 },
+    };
+  }
+
+  let totalFiles = 0;
+  let totalBytes = 0;
+  let legacyFiles = 0;
+  let legacyBytes = 0;
+  const byClinic: Record<string, { totalFiles: number; totalBytes: number }> = {};
+
+  const topEntries = fs.readdirSync(UPLOAD_ROOT, { withFileTypes: true });
+  for (const entry of topEntries) {
+    const fullPath = path.resolve(UPLOAD_ROOT, entry.name);
+    if (!fullPath.startsWith(UPLOAD_ROOT + path.sep)) continue;
+    if (entry.isDirectory() && entry.name.startsWith('tenant_')) {
+      const clinicId = entry.name.slice('tenant_'.length);
+      const stats = walkStorageDir(fullPath);
+      byClinic[clinicId] = stats;
+      totalFiles += stats.totalFiles;
+      totalBytes += stats.totalBytes;
+    } else if (entry.isDirectory()) {
+      const stats = walkStorageDir(fullPath);
+      legacyFiles += stats.totalFiles;
+      legacyBytes += stats.totalBytes;
+      totalFiles += stats.totalFiles;
+      totalBytes += stats.totalBytes;
+    } else if (entry.isFile()) {
+      const stats = fs.statSync(fullPath);
+      legacyFiles += 1;
+      legacyBytes += stats.size;
+      totalFiles += 1;
+      totalBytes += stats.size;
+    }
+  }
+
+  return {
+    totalFiles,
+    totalBytes,
+    byClinic,
+    legacyStats: { totalFiles: legacyFiles, totalBytes: legacyBytes },
+  };
+}
+
+async function computeStorageStatsAsync(
+  clinicId?: string
+): Promise<{ totalFiles: number; totalBytes: number }> {
+  const local = computeLocalStorageStats(clinicId);
+  if (!isB2Configured()) return local;
+
+  try {
+    const b2 = await getB2StorageStats(clinicId);
+    return {
+      totalFiles: local.totalFiles + b2.totalFiles,
+      totalBytes: local.totalBytes + b2.totalBytes,
+    };
+  } catch (err) {
+    console.error('Backblaze B2 storage stats failed:', err instanceof Error ? err.message : err);
+    return local;
+  }
+}
+
+async function computePerClinicStorageBreakdownAsync(): Promise<{
+  totalFiles: number;
+  totalBytes: number;
+  byClinic: Record<string, { totalFiles: number; totalBytes: number }>;
+  legacyStats: { totalFiles: number; totalBytes: number };
+}> {
+  const local = computeLocalPerClinicStorageBreakdown();
+  if (!isB2Configured()) return local;
+
+  try {
+    const b2 = await getB2PerClinicBreakdown();
+    const mergedByClinic: Record<string, { totalFiles: number; totalBytes: number }> = {};
+
+    for (const [cid, stats] of Object.entries(local.byClinic)) {
+      mergedByClinic[cid] = { ...stats };
+    }
+    for (const [cid, stats] of Object.entries(b2.byClinic)) {
+      const existing = mergedByClinic[cid] || { totalFiles: 0, totalBytes: 0 };
+      mergedByClinic[cid] = {
+        totalFiles: existing.totalFiles + stats.totalFiles,
+        totalBytes: existing.totalBytes + stats.totalBytes,
+      };
+    }
+
+    return {
+      totalFiles: local.totalFiles + b2.totalFiles,
+      totalBytes: local.totalBytes + b2.totalBytes,
+      byClinic: mergedByClinic,
+      legacyStats: {
+        totalFiles: local.legacyStats.totalFiles + b2.legacyStats.totalFiles,
+        totalBytes: local.legacyStats.totalBytes + b2.legacyStats.totalBytes,
+      },
+    };
+  } catch (err) {
+    console.error('Backblaze B2 breakdown failed:', err instanceof Error ? err.message : err);
+    return local;
+  }
 }
 
 function getGenAiClient(): GoogleGenAI {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey || apiKey === 'MY_GEMINI_API_KEY') {
     const err = new Error(
-      'Gemini API key is not configured on the server. Add GEMINI_API_KEY in Settings > Secrets.'
+      'Gemini API key is not configured on the server. Add GEMINI_API_KEY in server environment configuration.'
     ) as Error & { statusCode?: number };
     err.statusCode = 500;
     throw err;
@@ -194,7 +552,7 @@ function getGenAiClient(): GoogleGenAI {
     apiKey,
     httpOptions: {
       headers: {
-        'User-Agent': 'aistudio-build',
+        'User-Agent': 'materia-medica-clinic/1.0',
       },
     },
   });
@@ -355,14 +713,14 @@ function mapGeminiError(error: unknown): { status: number; message: string } {
     return {
       status: 400,
       message:
-        'Gemini API authentication failed. Check your GEMINI_API_KEY in the Settings > Secrets panel.',
+        'Gemini API authentication failed. Check your GEMINI_API_KEY in server environment configuration.',
     };
   }
   if (status === 429 || rawMessage.includes('RESOURCE_EXHAUSTED')) {
     return {
       status: 429,
       message:
-        'Gemini API rate limit or quota reached. Please try again shortly or review your key in Settings > Secrets.',
+        'Gemini API rate limit or quota reached. Please try again shortly or review your server environment configuration.',
     };
   }
   if (status === 404 || rawMessage.includes('NOT_FOUND')) {
@@ -387,21 +745,92 @@ async function startServer(): Promise<void> {
   app.disable('x-powered-by');
   app.use(express.json({ limit: '2.5mb' }));
 
+  const { projectId: configuredFirebaseProjectId } = loadFirebaseAppletConfig();
+  const allowedOrigins = new Set<string>(
+    [
+      ...(configuredFirebaseProjectId
+        ? [
+            `https://${configuredFirebaseProjectId}.web.app`,
+            `https://${configuredFirebaseProjectId}.firebaseapp.com`,
+          ]
+        : []),
+      (process.env.APP_URL || '').trim().replace(/\/+$/, ''),
+      ...(process.env.CORS_ALLOW_ORIGINS || '')
+        .split(',')
+        .map((o) => o.trim().replace(/\/+$/, ''))
+        .filter(Boolean),
+    ].filter(Boolean)
+  );
+
+  app.use('/api', (req, res, next) => {
+    const origin = (req.headers.origin || '').trim().replace(/\/+$/, '');
+    if (origin && (allowedOrigins.has(origin) || origin.startsWith('http://localhost:'))) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-clinic-id');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+
   app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
   });
 
-  app.get('/api/storage/stats', requireAdmin, (_req, res) => {
+  app.get('/api/saas/health', requireSuperAdmin, async (_req: AuthenticatedRequest, res: Response) => {
     try {
-      const stats = computeStorageStats();
+      const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+      const geminiConfigured = Boolean(apiKey && apiKey !== 'MY_GEMINI_API_KEY');
+      const { projectId, firestoreDatabaseId } = loadFirebaseAppletConfig();
+      const b2Configured = isB2Configured();
+      let uploadRootWritable = false;
+      try {
+        fs.accessSync(UPLOAD_ROOT, fs.constants.W_OK);
+        uploadRootWritable = true;
+      } catch {
+        uploadRootWritable = false;
+      }
+      const breakdown = await computePerClinicStorageBreakdownAsync();
+
+      res.json({
+        ok: true,
+        nodeVersion: process.version,
+        environment: process.env.NODE_ENV || 'development',
+        port: PORT,
+        uptimeSeconds: Math.round(process.uptime()),
+        geminiConfigured,
+        firebaseConfigured: Boolean(projectId),
+        firebaseProjectId: projectId || null,
+        firestoreDatabaseId: firestoreDatabaseId || null,
+        uploadRootWritable,
+        storageBackend: b2Configured ? 'backblaze_b2' : 'local_disk',
+        b2Configured,
+        b2BucketName: getB2BucketNameForHealth(),
+        storage: breakdown,
+      });
+    } catch {
+      res.status(500).json({ error: 'Unable to inspect SaaS platform health.' });
+    }
+  });
+
+  app.get('/api/storage/stats', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    try {
+      const targetClinic =
+        req.isSuperAdmin && req.query.clinicId === 'all' ? 'all' : req.clinicId;
+      const stats = await computeStorageStatsAsync(targetClinic);
       res.json(stats);
     } catch {
       res.status(500).json({ error: 'Unable to calculate storage usage.' });
     }
   });
 
-  app.post('/api/photos/upload', requireAdmin, (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/photos/upload', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const body = req.body as { patientId?: unknown; dataBase64?: unknown };
+    const clinicId = req.clinicId || 'default';
     if (typeof body?.patientId !== 'string' || !SAFE_ID_REGEX.test(body.patientId)) {
       res.status(400).json({ error: 'Invalid patientId.' });
       return;
@@ -413,7 +842,7 @@ async function startServer(): Promise<void> {
 
     const strippedBase64 = body.dataBase64.replace(/^data:image\/[a-zA-Z0-9.+-]+;base64,/, '');
     if (strippedBase64.length > 2_400_000) {
-      res.status(413).json({ error: 'Compressed image exceeds 1.5 MB free-tier upload cap.' });
+      res.status(413).json({ error: 'Compressed image exceeds 1.5 MB upload cap.' });
       return;
     }
 
@@ -423,21 +852,51 @@ async function startServer(): Promise<void> {
       return;
     }
 
+    if (!req.isSuperAdmin && req.storageLimitMb) {
+      const currentUsage = await computeStorageStatsAsync(clinicId);
+      const limitBytes = req.storageLimitMb * 1024 * 1024;
+      if (currentUsage.totalBytes + buffer.length > limitBytes) {
+        res.status(413).json({
+          error: `Clinic photo storage quota (${req.storageLimitMb} MB) reached. Contact platform admin to upgrade.`,
+        });
+        return;
+      }
+    }
+
     const detected = detectImageType(buffer);
     if (!detected) {
       res.status(400).json({ error: 'Only valid JPEG, PNG, or WebP images are permitted.' });
       return;
     }
 
-    const patientDir = resolveConfinedPath(body.patientId);
+    const photoId = crypto.randomUUID().replace(/-/g, '');
+    const fileName = `${photoId}.${detected.ext}`;
+
+    if (isB2Configured()) {
+      const objectKey = buildTenantObjectKey(clinicId, body.patientId, fileName);
+      try {
+        await uploadBufferToB2(objectKey, buffer, detected.mimeType);
+        res.status(201).json({
+          photoId,
+          fileName,
+          url: `/api/photos/${clinicId}/${body.patientId}/${fileName}`,
+          mimeType: detected.mimeType,
+          sizeBytes: buffer.length,
+        });
+      } catch (err) {
+        console.error('Backblaze B2 upload error:', err instanceof Error ? err.message : err);
+        res.status(500).json({ error: 'Failed to store image in Backblaze B2 storage.' });
+      }
+      return;
+    }
+
+    const patientDir = resolveTenantPhotoPath(clinicId, body.patientId);
     if (!patientDir) {
       res.status(400).json({ error: 'Invalid storage path.' });
       return;
     }
 
-    const photoId = crypto.randomUUID().replace(/-/g, '');
-    const fileName = `${photoId}.${detected.ext}`;
-    const targetPath = resolveConfinedPath(body.patientId, fileName);
+    const targetPath = resolveTenantPhotoPath(clinicId, body.patientId, fileName);
     if (!targetPath) {
       res.status(400).json({ error: 'Invalid target filename.' });
       return;
@@ -449,20 +908,24 @@ async function startServer(): Promise<void> {
       res.status(201).json({
         photoId,
         fileName,
-        url: `/api/photos/${body.patientId}/${fileName}`,
+        url: `/api/photos/${clinicId}/${body.patientId}/${fileName}`,
         mimeType: detected.mimeType,
         sizeBytes: buffer.length,
       });
     } catch {
-      res.status(500).json({ error: 'Failed to store image on free-tier upload server.' });
+      res.status(500).json({ error: 'Failed to store image on upload server.' });
     }
   });
 
-  app.get('/api/photos/:patientId/:fileName', requireAdmin, (req, res) => {
-    const { patientId, fileName } = req.params;
-    const targetPath = resolveConfinedPath(patientId, fileName);
-    if (!targetPath || !fs.existsSync(targetPath)) {
-      res.status(404).json({ error: 'Clinical photo not found.' });
+  app.get('/api/photos/:clinicId/:patientId/:fileName', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const { clinicId, patientId, fileName } = req.params;
+    if (!req.isSuperAdmin && req.clinicId !== clinicId) {
+      res.status(401).json({ error: 'Cross-clinic photo access denied.' });
+      return;
+    }
+    const targetPath = resolveTenantPhotoPath(clinicId, patientId, fileName);
+    if (!targetPath) {
+      res.status(400).json({ error: 'Invalid photo path.' });
       return;
     }
 
@@ -474,21 +937,54 @@ async function startServer(): Promise<void> {
           ? 'image/png'
           : 'image/jpeg';
 
+    if (isB2Configured()) {
+      try {
+        const objectKey = buildTenantObjectKey(clinicId, patientId, fileName);
+        const b2Result = await downloadBufferFromB2(objectKey);
+        if (b2Result) {
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          res.send(b2Result.buffer);
+          return;
+        }
+      } catch (err) {
+        console.error('Backblaze B2 download error:', err instanceof Error ? err.message : err);
+        if (!fs.existsSync(targetPath)) {
+          res.status(500).json({ error: 'Unable to retrieve clinical photo from Backblaze B2.' });
+          return;
+        }
+      }
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      res.status(404).json({ error: 'Clinical photo not found.' });
+      return;
+    }
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.setHeader('Cache-Control', 'private, max-age=3600');
     fs.createReadStream(targetPath).pipe(res);
   });
 
-  app.delete('/api/photos/:patientId/:fileName', requireAdmin, (req, res) => {
-    const { patientId, fileName } = req.params;
-    const targetPath = resolveConfinedPath(patientId, fileName);
+  app.delete('/api/photos/:clinicId/:patientId/:fileName', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
+    const { clinicId, patientId, fileName } = req.params;
+    if (!req.isSuperAdmin && req.clinicId !== clinicId) {
+      res.status(401).json({ error: 'Cross-clinic photo deletion denied.' });
+      return;
+    }
+    const targetPath = resolveTenantPhotoPath(clinicId, patientId, fileName);
     if (!targetPath) {
       res.status(400).json({ error: 'Invalid photo path.' });
       return;
     }
 
     try {
+      if (isB2Configured()) {
+        const objectKey = buildTenantObjectKey(clinicId, patientId, fileName);
+        await deleteObjectFromB2(objectKey);
+      }
       if (fs.existsSync(targetPath)) {
         fs.unlinkSync(targetPath);
       }
@@ -498,7 +994,77 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/repertory/quick-search', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  // Legacy 2-segment photo routes (Super Admin backwards compatibility)
+  app.get('/api/photos/:patientId/:fileName', requireSuperAdmin, async (req, res) => {
+    const { patientId, fileName } = req.params;
+    const targetPath = resolveConfinedPath(patientId, fileName);
+    if (!targetPath) {
+      res.status(400).json({ error: 'Invalid photo path.' });
+      return;
+    }
+
+    const ext = path.extname(fileName).toLowerCase();
+    const contentType =
+      ext === '.webp'
+        ? 'image/webp'
+        : ext === '.png'
+          ? 'image/png'
+          : 'image/jpeg';
+
+    if (isB2Configured()) {
+      try {
+        const objectKey = buildLegacyObjectKey(patientId, fileName);
+        const b2Result = await downloadBufferFromB2(objectKey);
+        if (b2Result) {
+          res.setHeader('Content-Type', contentType);
+          res.setHeader('X-Content-Type-Options', 'nosniff');
+          res.setHeader('Cache-Control', 'private, max-age=3600');
+          res.send(b2Result.buffer);
+          return;
+        }
+      } catch (err) {
+        console.error('Backblaze B2 legacy download error:', err instanceof Error ? err.message : err);
+        if (!fs.existsSync(targetPath)) {
+          res.status(500).json({ error: 'Unable to retrieve clinical photo from Backblaze B2.' });
+          return;
+        }
+      }
+    }
+
+    if (!fs.existsSync(targetPath)) {
+      res.status(404).json({ error: 'Clinical photo not found.' });
+      return;
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    fs.createReadStream(targetPath).pipe(res);
+  });
+
+  app.delete('/api/photos/:patientId/:fileName', requireSuperAdmin, async (req, res) => {
+    const { patientId, fileName } = req.params;
+    const targetPath = resolveConfinedPath(patientId, fileName);
+    if (!targetPath) {
+      res.status(400).json({ error: 'Invalid photo path.' });
+      return;
+    }
+
+    try {
+      if (isB2Configured()) {
+        const objectKey = buildLegacyObjectKey(patientId, fileName);
+        await deleteObjectFromB2(objectKey);
+      }
+      if (fs.existsSync(targetPath)) {
+        fs.unlinkSync(targetPath);
+      }
+      res.json({ deleted: true });
+    } catch {
+      res.status(500).json({ error: 'Unable to delete photo from storage.' });
+    }
+  });
+
+  app.post('/api/repertory/quick-search', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const body = req.body as {
       query?: unknown;
       savedEntries?: unknown;
@@ -804,7 +1370,7 @@ async function startServer(): Promise<void> {
     }
   });
 
-  app.post('/api/repertory/compare', requireAdmin, async (req: AuthenticatedRequest, res: Response) => {
+  app.post('/api/repertory/compare', requireClinicOrSuperAdmin, async (req: AuthenticatedRequest, res: Response) => {
     const body = req.body as {
       remedyA?: unknown;
       remedyB?: unknown;
@@ -984,7 +1550,7 @@ async function startServer(): Promise<void> {
 
   app.post(
     '/api/patients/constitutional-map',
-    requireAdmin,
+    requireClinicOrSuperAdmin,
     async (req: AuthenticatedRequest, res: Response) => {
       const body = req.body as {
         patientContext?: unknown;
@@ -1315,7 +1881,7 @@ async function startServer(): Promise<void> {
 
   app.post(
     '/api/repertory/note-suggestions',
-    requireAdmin,
+    requireClinicOrSuperAdmin,
     async (req: AuthenticatedRequest, res: Response) => {
       const body = req.body as {
         text?: unknown;
