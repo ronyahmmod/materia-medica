@@ -487,7 +487,6 @@
         },
         "potency": {
           "type": "string",
-          "minLength": 1,
           "maxLength": 32
         },
         "dosage": {
@@ -541,7 +540,6 @@
         "visitDate",
         "presentingSymptoms",
         "remedyName",
-        "potency",
         "dosage",
         "createdBy",
         "createdAt",
@@ -843,7 +841,6 @@
         },
         "firstRemedyPotency": {
           "type": "string",
-          "minLength": 1,
           "maxLength": 32
         },
         "secondRemedyAfternoon": {
@@ -900,7 +897,6 @@
         "diseaseName",
         "symptoms",
         "firstRemedyMorning",
-        "firstRemedyPotency",
         "createdBy",
         "createdAt",
         "updatedAt"

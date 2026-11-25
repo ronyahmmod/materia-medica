@@ -927,7 +927,7 @@ export default function App() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 flex text-slate-900">
+    <div className="min-h-screen bg-slate-50 flex text-slate-900 print:block print:min-h-0 print:bg-white">
       {/* Mobile Sidebar Backdrop */}
       {mobileMenuOpen && (
         <div
@@ -1176,7 +1176,7 @@ export default function App() {
       </aside>
 
       {/* Main Content Area */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex-1 min-w-0 flex flex-col print:block">
         {/* Top Bar Contract */}
         <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-5 shrink-0 print:hidden">
           <div className="flex items-center gap-3 min-w-0">
@@ -1285,7 +1285,7 @@ export default function App() {
         )}
 
         {/* Main Viewport */}
-        <main className="flex-1 p-6 lg:p-8 max-w-[1280px] w-full mx-auto print:p-0 print:max-w-none">
+        <main className="flex-1 p-6 lg:p-8 max-w-[1280px] w-full mx-auto print:p-0 print:max-w-none print:block">
           {showingSaasConsole ? (
             <SuperAdminConsole
               clinics={clinics}

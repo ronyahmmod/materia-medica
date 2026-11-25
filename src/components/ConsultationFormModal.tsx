@@ -120,7 +120,7 @@ export function ConsultationFormModal({
     prefill?.firstRemedyCompanion || ''
   );
   const [firstRemedyPotency, setFirstRemedyPotency] = useState(
-    prefill?.firstRemedyPotency || '200C'
+    prefill?.firstRemedyPotency || ''
   );
   const [secondRemedyAfternoon, setSecondRemedyAfternoon] = useState(
     prefill?.secondRemedyAfternoon || ''
@@ -129,7 +129,7 @@ export function ConsultationFormModal({
     prefill?.secondRemedyCompanion || ''
   );
   const [secondRemedyPotency, setSecondRemedyPotency] = useState(
-    prefill?.secondRemedyPotency || '30C'
+    prefill?.secondRemedyPotency || ''
   );
   const [showCompanionFields, setShowCompanionFields] = useState(
     isVetPatient ||
@@ -238,7 +238,7 @@ export function ConsultationFormModal({
         (rule) =>
           rule.symptom.toLowerCase().includes(q) ||
           rule.remedyName.toLowerCase().includes(q) ||
-          rule.potency.toLowerCase().includes(q) ||
+          (rule.potency || '').toLowerCase().includes(q) ||
           (rule.doseOrUnit || '').toLowerCase().includes(q) ||
           (rule.notes || '').toLowerCase().includes(q)
       );
@@ -263,7 +263,7 @@ export function ConsultationFormModal({
           const hit =
             rule.symptom.toLowerCase().includes(q) ||
             rule.remedyName.toLowerCase().includes(q) ||
-            rule.potency.toLowerCase().includes(q) ||
+            (rule.potency || '').toLowerCase().includes(q) ||
             (rule.doseOrUnit || '').toLowerCase().includes(q) ||
             (rule.notes || '').toLowerCase().includes(q) ||
             entry.diseaseName.toLowerCase().includes(q);
@@ -326,10 +326,10 @@ export function ConsultationFormModal({
 
     if (resolvedSlot === 'morning') {
       setFirstRemedyMorning(rule.remedyName);
-      setFirstRemedyPotency(rule.potency || '30C');
+      setFirstRemedyPotency(rule.potency || '');
     } else if (resolvedSlot === 'afternoon') {
       setSecondRemedyAfternoon(rule.remedyName);
-      setSecondRemedyPotency(rule.potency || '30C');
+      setSecondRemedyPotency(rule.potency || '');
     } else if (resolvedSlot === 'companion-morning') {
       setFirstRemedyCompanion(rule.remedyName);
       setShowCompanionFields(true);
@@ -368,9 +368,9 @@ export function ConsultationFormModal({
           : `[${entry.diseaseName}] ${entry.symptoms}`
       );
       setFirstRemedyMorning(entry.firstRemedyMorning);
-      setFirstRemedyPotency(entry.firstRemedyPotency || '200C');
+      setFirstRemedyPotency(entry.firstRemedyPotency || '');
       setSecondRemedyAfternoon(entry.secondRemedyAfternoon || '');
-      setSecondRemedyPotency(entry.secondRemedyPotency || '30C');
+      setSecondRemedyPotency(entry.secondRemedyPotency || '');
     }
     if (entry.dosageInstructions?.trim()) {
       setDosage(entry.dosageInstructions.trim());
@@ -456,10 +456,10 @@ export function ConsultationFormModal({
 
     const morningRem = firstRemedyMorning.trim();
     const morningComp = firstRemedyCompanion.trim();
-    const morningPot = firstRemedyPotency.trim() || '30C';
+    const morningPot = firstRemedyPotency.trim();
     const afternoonRem = secondRemedyAfternoon.trim();
     const afternoonComp = secondRemedyCompanion.trim();
-    const afternoonPot = secondRemedyPotency.trim() || '30C';
+    const afternoonPot = secondRemedyPotency.trim();
 
     if (!presentingSymptoms.trim() || !morningRem || !dosage.trim()) {
       setErrorMsg(
@@ -514,13 +514,18 @@ export function ConsultationFormModal({
     const summaryRemedyName = (
       afternoonJoined ? `${morningJoined} | ${afternoonJoined}` : morningJoined
     ).slice(0, FIELD_LIMITS.remedyNameMax);
-    const summaryPotency = (
-      afternoonJoined ? `${morningPot} / ${afternoonPot}` : morningPot
-    ).slice(0, FIELD_LIMITS.potencyMax);
+    const summaryPotency = [morningPot, afternoonJoined ? afternoonPot : '']
+      .filter(Boolean)
+      .join(' / ')
+      .slice(0, FIELD_LIMITS.potencyMax);
+    const morningLabel = morningPot ? `${morningJoined} (${morningPot})` : morningJoined;
+    const afternoonLabel = afternoonJoined
+      ? afternoonPot
+        ? `${afternoonJoined} (${afternoonPot})`
+        : afternoonJoined
+      : '';
     const summaryLastRemedy = (
-      afternoonJoined
-        ? `${morningJoined} (${morningPot}) · ${afternoonJoined} (${afternoonPot})`
-        : `${morningJoined} ${morningPot}`
+      afternoonLabel ? `${morningLabel} · ${afternoonLabel}` : morningLabel
     ).slice(0, FIELD_LIMITS.remedyNameMax);
 
     setSubmitting(true);
@@ -559,15 +564,19 @@ export function ConsultationFormModal({
         visitDate: visitDate.slice(0, 32),
         presentingSymptoms: presentingSymptoms.trim().slice(0, FIELD_LIMITS.presentingSymptomsMax),
         firstRemedyMorning: morningRem.slice(0, FIELD_LIMITS.remedyNameMax),
-        firstRemedyPotency: morningPot.slice(0, FIELD_LIMITS.potencyMax),
         remedyName: summaryRemedyName,
-        potency: summaryPotency,
         dosage: dosage.trim().slice(0, FIELD_LIMITS.dosageMax),
         createdBy: uid,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
 
+      if (morningPot) {
+        payload.firstRemedyPotency = morningPot.slice(0, FIELD_LIMITS.potencyMax);
+      }
+      if (summaryPotency) {
+        payload.potency = summaryPotency;
+      }
       if (diseaseName.trim()) {
         payload.diseaseName = diseaseName.trim().slice(0, FIELD_LIMITS.diseaseNameMax);
       }
@@ -576,8 +585,8 @@ export function ConsultationFormModal({
       }
       if (afternoonRem) {
         payload.secondRemedyAfternoon = afternoonRem.slice(0, FIELD_LIMITS.remedyNameMax);
-        payload.secondRemedyPotency = afternoonPot.slice(0, FIELD_LIMITS.potencyMax);
-      } else if (afternoonComp) {
+      }
+      if ((afternoonRem || afternoonComp) && afternoonPot) {
         payload.secondRemedyPotency = afternoonPot.slice(0, FIELD_LIMITS.potencyMax);
       }
       if (afternoonComp) {
@@ -810,8 +819,10 @@ export function ConsultationFormModal({
                                   <p className="text-[11px] text-slate-500 mt-0.5">{rule.notes}</p>
                                 )}
                                 <p className="text-[11px] text-teal-800 font-medium mt-0.5">
-                                  {rule.remedyName}{' '}
-                                  <span className="font-mono">{rule.potency}</span>
+                                  {rule.remedyName}
+                                  {rule.potency ? (
+                                    <span className="font-mono ml-1">{rule.potency}</span>
+                                  ) : null}
                                   {rule.doseOrUnit ? ` · ${rule.doseOrUnit}` : ''}
                                 </p>
                               </div>
@@ -916,8 +927,10 @@ export function ConsultationFormModal({
                                       →{' '}
                                       <span className="font-semibold text-teal-800">
                                         {rule.remedyName}
-                                      </span>{' '}
-                                      <span className="font-mono">{rule.potency}</span>
+                                      </span>
+                                      {rule.potency ? (
+                                        <span className="font-mono ml-1">{rule.potency}</span>
+                                      ) : null}
                                       {rule.doseOrUnit ? ` (${rule.doseOrUnit})` : ''}
                                     </div>
                                     {rule.notes && (
@@ -968,9 +981,10 @@ export function ConsultationFormModal({
                           <p className="text-[11px] text-slate-600">
                             {item.symptoms} —{' '}
                             <span className="font-medium text-teal-800">
-                              {item.firstRemedyMorning} ({item.firstRemedyPotency})
+                              {item.firstRemedyMorning}
+                              {item.firstRemedyPotency ? ` (${item.firstRemedyPotency})` : ''}
                               {item.secondRemedyAfternoon
-                                ? ` + ${item.secondRemedyAfternoon} (${item.secondRemedyPotency || '30C'})`
+                                ? ` + ${item.secondRemedyAfternoon}${item.secondRemedyPotency ? ` (${item.secondRemedyPotency})` : ''}`
                                 : ''}
                             </span>
                           </p>
@@ -1198,16 +1212,15 @@ export function ConsultationFormModal({
 
               <div className={showCompanionFields ? 'sm:col-span-3' : 'sm:col-span-4'}>
                 <label className="block text-xs font-medium text-slate-800 mb-1.5">
-                  {t('Potency (শক্তি) *', 'শক্তি (১ম) *')}
+                  {t('Potency (1st — Optional)', 'শক্তি (১ম — ঐচ্ছিক)')}
                 </label>
                 <input
                   type="text"
-                  required
                   list="homeopathy-potencies"
                   maxLength={FIELD_LIMITS.potencyMax}
                   value={firstRemedyPotency}
                   onChange={(e) => setFirstRemedyPotency(e.target.value)}
-                  placeholder="200C / Phyto"
+                  placeholder={t('Optional (200C / Phyto)', 'ঐচ্ছিক (যেমন: 200C)')}
                   className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                 />
               </div>
@@ -1252,7 +1265,7 @@ export function ConsultationFormModal({
 
               <div className={showCompanionFields ? 'sm:col-span-3' : 'sm:col-span-4'}>
                 <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('Potency (শক্তি ২য়)', 'শক্তি (২য়)')}
+                  {t('Potency (2nd — Optional)', 'শক্তি (২য় — ঐচ্ছিক)')}
                 </label>
                 <input
                   type="text"
@@ -1260,7 +1273,7 @@ export function ConsultationFormModal({
                   maxLength={FIELD_LIMITS.potencyMax}
                   value={secondRemedyPotency}
                   onChange={(e) => setSecondRemedyPotency(e.target.value)}
-                  placeholder="30C"
+                  placeholder={t('Optional (30C)', 'ঐচ্ছিক (30C)')}
                   className="w-full px-3 py-2 text-sm font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                 />
               </div>
@@ -1342,7 +1355,7 @@ export function ConsultationFormModal({
 
                   <div>
                     <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                      {t('Potency (শক্তি)', 'শক্তি (ফাইল/অতিরিক্ত)')}
+                      {t('Potency (Optional)', 'শক্তি (ফাইল — ঐচ্ছিক)')}
                     </label>
                     <input
                       type="text"
@@ -1350,7 +1363,7 @@ export function ConsultationFormModal({
                       maxLength={FIELD_LIMITS.potencyMax}
                       value={extraPotency}
                       onChange={(e) => setExtraPotency(e.target.value)}
-                      placeholder="30C / 6X"
+                      placeholder={t('Optional (30C / 6X)', 'ঐচ্ছিক (30C / 6X)')}
                       className="w-full px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
                     />
                   </div>

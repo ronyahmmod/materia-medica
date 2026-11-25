@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
   onSnapshot,
   query,
@@ -9,6 +9,7 @@ import {
 } from 'firebase/firestore';
 import {
   BookMarked,
+  CopyPlus,
   Edit3,
   Plus,
   Search,
@@ -61,7 +62,7 @@ function createEmptyRule(timing: RemedyRuleTiming = 'general'): DiseaseSymptomRu
     id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
     symptom: '',
     remedyName: '',
-    potency: timing === 'biochemic' ? '6X' : '30C',
+    potency: '',
     doseOrUnit: '',
     timing,
     notes: '',
@@ -74,7 +75,7 @@ function deriveRulesFromLegacyEntry(entry: DiseaseRemedyEntry): DiseaseSymptomRu
       id: r.id || `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
       symptom: r.symptom || '',
       remedyName: r.remedyName || '',
-      potency: r.potency || '30C',
+      potency: r.potency || '',
       doseOrUnit: r.doseOrUnit || '',
       timing: r.timing || 'general',
       notes: r.notes || '',
@@ -86,7 +87,7 @@ function deriveRulesFromLegacyEntry(entry: DiseaseRemedyEntry): DiseaseSymptomRu
       id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
       symptom: entry.symptoms || entry.diseaseName,
       remedyName: entry.firstRemedyMorning || '',
-      potency: entry.firstRemedyPotency || '30C',
+      potency: entry.firstRemedyPotency || '',
       doseOrUnit: '',
       timing: 'general',
       notes: '',
@@ -98,7 +99,7 @@ function deriveRulesFromLegacyEntry(entry: DiseaseRemedyEntry): DiseaseSymptomRu
       id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
       symptom: entry.symptoms || entry.diseaseName,
       remedyName: entry.secondRemedyAfternoon.trim(),
-      potency: entry.secondRemedyPotency?.trim() || '30C',
+      potency: entry.secondRemedyPotency?.trim() || '',
       doseOrUnit: '',
       timing: 'general',
       notes: '',
@@ -136,6 +137,10 @@ export function DiseaseDatabaseView({
   const [clinicalNotes, setClinicalNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [activeRemedyDropdownRuleId, setActiveRemedyDropdownRuleId] = useState<string | null>(null);
+  const [activePotencyDropdownRuleId, setActivePotencyDropdownRuleId] = useState<string | null>(null);
+  const [lastAddedRuleId, setLastAddedRuleId] = useState<string | null>(null);
+  const ruleCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Prescribe to Selected Patient Flow
   const [prescribePrefill, setPrescribePrefill] = useState<ConsultationPrefill | null>(null);
@@ -191,7 +196,7 @@ export function DiseaseDatabaseView({
         (rule) =>
           rule.symptom.toLowerCase().includes(q) ||
           rule.remedyName.toLowerCase().includes(q) ||
-          rule.potency.toLowerCase().includes(q) ||
+          (rule.potency || '').toLowerCase().includes(q) ||
           (rule.doseOrUnit || '').toLowerCase().includes(q) ||
           (rule.notes || '').toLowerCase().includes(q)
       );
@@ -200,7 +205,7 @@ export function DiseaseDatabaseView({
         entry.diseaseName.toLowerCase().includes(q) ||
         entry.symptoms.toLowerCase().includes(q) ||
         entry.firstRemedyMorning.toLowerCase().includes(q) ||
-        entry.firstRemedyPotency.toLowerCase().includes(q) ||
+        (entry.firstRemedyPotency || '').toLowerCase().includes(q) ||
         (entry.secondRemedyAfternoon || '').toLowerCase().includes(q) ||
         (entry.secondRemedyPotency || '').toLowerCase().includes(q) ||
         (entry.dosageInstructions || '').toLowerCase().includes(q) ||
@@ -240,6 +245,129 @@ export function DiseaseDatabaseView({
     });
   }, [patients, patientPickerQuery, prescribePrefill, prescribeScope]);
 
+  // Build unified remedy & potency suggestion catalogs from clinic DB + standard materia medica
+  const { remedyCatalog, potencyCatalog } = useMemo(() => {
+    const BIOCHEMIC_DEFAULTS = new Set([
+      'calcarea fluorica',
+      'calcarea phosphorica',
+      'calcarea sulphurica',
+      'ferrum phosphoricum',
+      'kali muriaticum',
+      'kali phosphoricum',
+      'kali sulphuricum',
+      'magnesia phosphorica',
+      'natrum muriaticum',
+      'natrum phosphoricum',
+      'natrum sulphuricum',
+      'silicea',
+    ]);
+
+    const remedyMap = new Map<
+      string,
+      { name: string; potencies: string[]; savedCount: number }
+    >();
+    const potencySet = new Set<string>(POTENCY_OPTIONS);
+
+    const recordPair = (rawName: string, rawPotency?: string, isSaved = false) => {
+      const name = rawName.trim();
+      if (!name) return;
+      const key = name.toLowerCase();
+      const pot = (rawPotency || '').trim();
+      if (pot) potencySet.add(pot);
+
+      let item = remedyMap.get(key);
+      if (!item) {
+        item = { name, potencies: [], savedCount: 0 };
+        remedyMap.set(key, item);
+      }
+      if (isSaved) item.savedCount += 1;
+      if (pot && !item.potencies.some((p) => p.toLowerCase() === pot.toLowerCase())) {
+        item.potencies.push(pot);
+      }
+    };
+
+    for (const entry of entries) {
+      const rules = deriveRulesFromLegacyEntry(entry);
+      for (const r of rules) {
+        recordPair(r.remedyName, r.potency, true);
+      }
+    }
+
+    for (const r of symptomRules) {
+      recordPair(r.remedyName, r.potency, false);
+    }
+
+    for (const rem of COMMON_REMEDIES) {
+      const key = rem.toLowerCase();
+      if (!remedyMap.has(key)) {
+        const defaultPotencies = BIOCHEMIC_DEFAULTS.has(key)
+          ? ['6X', '12X', '30C']
+          : ['30C', '200C', '1M'];
+        remedyMap.set(key, { name: rem, potencies: defaultPotencies, savedCount: 0 });
+      } else {
+        const existing = remedyMap.get(key)!;
+        if (existing.potencies.length === 0) {
+          existing.potencies = BIOCHEMIC_DEFAULTS.has(key)
+            ? ['6X', '12X', '30C']
+            : ['30C', '200C', '1M'];
+        }
+      }
+    }
+
+    const sortedRemedies = Array.from(remedyMap.values()).sort(
+      (a, b) => b.savedCount - a.savedCount || a.name.localeCompare(b.name)
+    );
+
+    return {
+      remedyCatalog: sortedRemedies,
+      potencyCatalog: Array.from(potencySet),
+    };
+  }, [entries, symptomRules]);
+
+  const getRemedySuggestions = (queryText: string) => {
+    const q = queryText.trim().toLowerCase();
+    if (!q) {
+      return remedyCatalog.slice(0, 10);
+    }
+    const prefixMatches: typeof remedyCatalog = [];
+    const wordMatches: typeof remedyCatalog = [];
+    const substringMatches: typeof remedyCatalog = [];
+
+    for (const item of remedyCatalog) {
+      const lower = item.name.toLowerCase();
+      if (lower.startsWith(q)) {
+        prefixMatches.push(item);
+      } else if (lower.split(/[\s(/]+/).some((part) => part.startsWith(q))) {
+        wordMatches.push(item);
+      } else if (lower.includes(q)) {
+        substringMatches.push(item);
+      }
+    }
+    return [...prefixMatches, ...wordMatches, ...substringMatches].slice(0, 12);
+  };
+
+  const getPotencySuggestions = (queryText: string) => {
+    const q = queryText.trim().toLowerCase();
+    if (!q) return potencyCatalog.slice(0, 12);
+    const starts: string[] = [];
+    const contains: string[] = [];
+    for (const pot of potencyCatalog) {
+      const lower = pot.toLowerCase();
+      if (lower.startsWith(q)) starts.push(pot);
+      else if (lower.includes(q)) contains.push(pot);
+    }
+    return [...starts, ...contains].slice(0, 12);
+  };
+
+  useEffect(() => {
+    if (!lastAddedRuleId) return;
+    const el = ruleCardRefs.current[lastAddedRuleId];
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }
+    setLastAddedRuleId(null);
+  }, [lastAddedRuleId, symptomRules.length]);
+
   const openCreateModal = () => {
     setEditingEntry(null);
     setPatientScope(scopeFilter === 'all' ? 'All' : scopeFilter);
@@ -248,6 +376,8 @@ export function DiseaseDatabaseView({
     setDosageInstructions('');
     setClinicalNotes('');
     setFormError(null);
+    setActiveRemedyDropdownRuleId(null);
+    setActivePotencyDropdownRuleId(null);
     setShowFormModal(true);
   };
 
@@ -259,6 +389,8 @@ export function DiseaseDatabaseView({
     setDosageInstructions(entry.dosageInstructions || '');
     setClinicalNotes(entry.clinicalNotes || '');
     setFormError(null);
+    setActiveRemedyDropdownRuleId(null);
+    setActivePotencyDropdownRuleId(null);
     setShowFormModal(true);
   };
 
@@ -268,7 +400,26 @@ export function DiseaseDatabaseView({
 
   const addRuleRow = () => {
     if (symptomRules.length >= 50) return;
-    setSymptomRules((prev) => [...prev, createEmptyRule('general')]);
+    const nextRule = createEmptyRule('general');
+    setSymptomRules((prev) => [...prev, nextRule]);
+    setLastAddedRuleId(nextRule.id);
+  };
+
+  const addAnotherRemedyForSameSymptom = (sourceRule: DiseaseSymptomRule) => {
+    if (symptomRules.length >= 50) return;
+    const nextRule: DiseaseSymptomRule = {
+      ...createEmptyRule(sourceRule.timing || 'general'),
+      symptom: sourceRule.symptom,
+      notes: sourceRule.notes || '',
+    };
+    setSymptomRules((prev) => {
+      const idx = prev.findIndex((r) => r.id === sourceRule.id);
+      if (idx === -1) return [...prev, nextRule];
+      const copy = [...prev];
+      copy.splice(idx + 1, 0, nextRule);
+      return copy;
+    });
+    setLastAddedRuleId(nextRule.id);
   };
 
   const removeRuleRow = (id: string) => {
@@ -290,12 +441,12 @@ export function DiseaseDatabaseView({
     for (const rule of symptomRules) {
       const sym = rule.symptom.trim();
       const rem = rule.remedyName.trim();
-      const pot = rule.potency.trim();
-      if (!sym || !rem || !pot) {
+      const pot = (rule.potency || '').trim();
+      if (!sym || !rem) {
         setFormError(
           t(
-            'Every symptom row requires Symptom, Remedy Name, and Potency.',
-            'প্রতিটি সারিতে লক্ষণ, ঔষধের নাম এবং শক্তি পূরণ করা আবশ্যক।'
+            'Every symptom row requires Symptom and Remedy Name.',
+            'প্রতিটি সারিতে লক্ষণ এবং ঔষধের নাম পূরণ করা আবশ্যক।'
           )
         );
         return;
@@ -331,7 +482,10 @@ export function DiseaseDatabaseView({
 
     // Derive summary fields cleanly from structured rules
     const combinedSymptoms = sanitizedRules
-      .map((r) => (r.doseOrUnit ? `${r.symptom} [${r.remedyName} ${r.potency} · ${r.doseOrUnit}]` : r.symptom))
+      .map((r) => {
+        const remLabel = [r.remedyName, r.potency].filter(Boolean).join(' ');
+        return r.doseOrUnit ? `${r.symptom} [${remLabel} · ${r.doseOrUnit}]` : r.symptom;
+      })
       .join('\n')
       .slice(0, FIELD_LIMITS.diseaseSymptomsMax);
 
@@ -355,12 +509,12 @@ export function DiseaseDatabaseView({
         symptoms: combinedSymptoms,
         symptomRules: sanitizedRules,
         firstRemedyMorning: morningRule.remedyName.slice(0, FIELD_LIMITS.remedyNameMax),
-        firstRemedyPotency: morningRule.potency.slice(0, FIELD_LIMITS.potencyMax),
+        firstRemedyPotency: (morningRule.potency || '').slice(0, FIELD_LIMITS.potencyMax),
         secondRemedyAfternoon: afternoonRule
           ? afternoonRule.remedyName.slice(0, FIELD_LIMITS.remedyNameMax)
           : '',
         secondRemedyPotency: afternoonRule
-          ? afternoonRule.potency.slice(0, FIELD_LIMITS.potencyMax)
+          ? (afternoonRule.potency || '').slice(0, FIELD_LIMITS.potencyMax)
           : '',
         dosageInstructions: dosageInstructions.trim().slice(0, FIELD_LIMITS.dosageMax),
         clinicalNotes: clinicalNotes.trim().slice(0, FIELD_LIMITS.symptomNotesMax),
@@ -450,12 +604,12 @@ export function DiseaseDatabaseView({
 
     if (slot === 'afternoon') {
       prefill.secondRemedyAfternoon = rule.remedyName;
-      prefill.secondRemedyPotency = rule.potency;
+      prefill.secondRemedyPotency = rule.potency || '';
     } else if (slot === 'biochemic') {
-      prefill.biochemicMedicine = `${rule.remedyName} ${rule.potency}`.trim();
+      prefill.biochemicMedicine = [rule.remedyName, rule.potency].filter(Boolean).join(' ').trim();
     } else {
       prefill.firstRemedyMorning = rule.remedyName;
-      prefill.firstRemedyPotency = rule.potency;
+      prefill.firstRemedyPotency = rule.potency || '';
     }
 
     mapRuleUnitToPrefill(prefill, rule.doseOrUnit);
@@ -483,14 +637,14 @@ export function DiseaseDatabaseView({
       } else if (rule.timing === 'companion-afternoon' && !prefill.secondRemedyCompanion) {
         prefill.secondRemedyCompanion = rule.remedyName;
       } else if (rule.timing === 'biochemic' && !prefill.biochemicMedicine) {
-        prefill.biochemicMedicine = `${rule.remedyName} ${rule.potency}`.trim();
+        prefill.biochemicMedicine = [rule.remedyName, rule.potency].filter(Boolean).join(' ').trim();
       } else if (rule.timing === 'general') {
         if (!prefill.firstRemedyMorning) {
           prefill.firstRemedyMorning = rule.remedyName;
-          prefill.firstRemedyPotency = rule.potency;
+          prefill.firstRemedyPotency = rule.potency || '';
         } else if (!prefill.secondRemedyAfternoon) {
           prefill.secondRemedyAfternoon = rule.remedyName;
-          prefill.secondRemedyPotency = rule.potency;
+          prefill.secondRemedyPotency = rule.potency || '';
         }
       }
       mapRuleUnitToPrefill(prefill, rule.doseOrUnit);
@@ -498,7 +652,7 @@ export function DiseaseDatabaseView({
 
     if (!prefill.firstRemedyMorning) {
       prefill.firstRemedyMorning = entry.firstRemedyMorning;
-      prefill.firstRemedyPotency = entry.firstRemedyPotency;
+      prefill.firstRemedyPotency = entry.firstRemedyPotency || '';
     }
 
     setPatientPickerQuery('');
@@ -506,7 +660,7 @@ export function DiseaseDatabaseView({
     setPrescribeSingleRule(null);
     setPrescribeScope(entry.patientScope || 'All');
     setPrescribeSummaryLabel(
-      `${entry.diseaseName} · ${prefill.firstRemedyMorning} ${prefill.firstRemedyPotency || ''}`
+      `${entry.diseaseName} · ${[prefill.firstRemedyMorning, prefill.firstRemedyPotency].filter(Boolean).join(' ')}`
     );
     setPrescribePrefill(prefill);
   };
@@ -525,7 +679,7 @@ export function DiseaseDatabaseView({
     setPrescribeSingleRule({ entry, rule });
     setPrescribeScope(entry.patientScope || 'All');
     setPrescribeSummaryLabel(
-      `${entry.diseaseName} (${rule.symptom}) · ${rule.remedyName} ${rule.potency}${rule.doseOrUnit ? ` · ${rule.doseOrUnit}` : ''}`
+      `${entry.diseaseName} (${rule.symptom}) · ${[rule.remedyName, rule.potency].filter(Boolean).join(' ')}${rule.doseOrUnit ? ` · ${rule.doseOrUnit}` : ''}`
     );
     setPrescribePrefill(buildPrefillForSingleRule(entry, rule, initialSlot));
   };
@@ -743,8 +897,10 @@ export function DiseaseDatabaseView({
                           </div>
                           <p className="text-xs text-slate-800 leading-snug">{rule.symptom}</p>
                           <p className="text-xs font-semibold text-slate-900">
-                            {rule.remedyName}{' '}
-                            <span className="font-mono text-teal-800">{rule.potency}</span>
+                            {rule.remedyName}
+                            {rule.potency ? (
+                              <span className="font-mono text-teal-800 ml-1">{rule.potency}</span>
+                            ) : null}
                           </p>
                           {rule.notes && (
                             <p className="text-[11px] text-slate-500">{rule.notes}</p>
@@ -807,8 +963,8 @@ export function DiseaseDatabaseView({
                 </h2>
                 <p className="text-xs text-slate-500 mt-0.5">
                   {t(
-                    'Enter disease, symptom, modalities (< / >), and remedy with potency. Morning vs Afternoon timing is chosen at visit time.',
-                    'রোগ, লক্ষণ, হ্রাস-বৃদ্ধি ও ঔষধ-শক্তি সংরক্ষণ করুন। সকালে না বিকালে খাবে তা ভিজিটের সময় নির্ধারণ করা হবে।'
+                    'Enter disease, symptom, modalities (< / >), and remedy (potency is optional). Morning vs Afternoon timing is chosen at visit time.',
+                    'রোগ, লক্ষণ, হ্রাস-বৃদ্ধি ও ঔষধ সংরক্ষণ করুন (পাওয়ার/শক্তি ঐচ্ছিক)। সকালে না বিকালে খাবে তা ভিজিটের সময় নির্ধারণ করা হবে।'
                   )}
                 </p>
               </div>
@@ -868,8 +1024,8 @@ export function DiseaseDatabaseView({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="block text-xs font-semibold text-slate-800">
                     {t(
-                      'Symptom-to-Remedy Rules (লক্ষণ অনুযায়ী ঔষধ ও শক্তি) *',
-                      'লক্ষণভিত্তিক ঔষধ ও শক্তির তালিকা *'
+                      'Symptom-to-Remedy Rules (লক্ষণ অনুযায়ী ঔষধ) *',
+                      'লক্ষণভিত্তিক ঔষধের তালিকা *'
                     )}{' '}
                     <span className="font-mono text-slate-500">({symptomRules.length}/50)</span>
                   </label>
@@ -890,16 +1046,41 @@ export function DiseaseDatabaseView({
                       ? DISEASE_ENTRY_RULE_TYPES
                       : [rule.timing, ...DISEASE_ENTRY_RULE_TYPES];
 
+                    const remedySuggestions =
+                      activeRemedyDropdownRuleId === rule.id
+                        ? getRemedySuggestions(rule.remedyName)
+                        : [];
+                    const potencySuggestions =
+                      activePotencyDropdownRuleId === rule.id
+                        ? getPotencySuggestions(rule.potency || '')
+                        : [];
+
                     return (
                       <div
                         key={rule.id}
+                        ref={(el) => {
+                          ruleCardRefs.current[rule.id] = el;
+                        }}
                         className="border border-slate-200 rounded-xl p-4 bg-slate-50/70 space-y-3"
                       >
-                        <div className="flex items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
                           <span className="text-xs font-semibold text-slate-700 font-mono">
                             #{index + 1}
                           </span>
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={symptomRules.length >= 50}
+                              onClick={() => addAnotherRemedyForSameSymptom(rule)}
+                              title={t(
+                                'Add another remedy for this same symptom',
+                                'এই একই লক্ষণে আরেকটি ঔষধ যোগ করুন'
+                              )}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-white border border-teal-200 rounded-md hover:bg-teal-50 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+                            >
+                              <CopyPlus className="w-3 h-3" />
+                              {t('+ Remedy (Same Symptom)', '+ একই লক্ষণে আরেকটি ঔষধ')}
+                            </button>
                             <select
                               value={rule.timing}
                               onChange={(e) =>
@@ -949,39 +1130,133 @@ export function DiseaseDatabaseView({
                         </div>
 
                         <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                          <div className="sm:col-span-5">
+                          <div className="sm:col-span-5 relative">
                             <label className="block text-[11px] font-medium text-slate-700 mb-1">
                               {t('Remedy Name *', 'ঔষধের নাম *')}
                             </label>
                             <input
                               type="text"
                               required
-                              list="disease-remedy-list"
+                              autoComplete="off"
                               maxLength={FIELD_LIMITS.remedyNameMax}
                               value={rule.remedyName}
-                              onChange={(e) => updateRule(rule.id, { remedyName: e.target.value })}
+                              onFocus={() => setActiveRemedyDropdownRuleId(rule.id)}
+                              onBlur={() => {
+                                window.setTimeout(() => {
+                                  setActiveRemedyDropdownRuleId((cur) =>
+                                    cur === rule.id ? null : cur
+                                  );
+                                }, 120);
+                              }}
+                              onChange={(e) => {
+                                updateRule(rule.id, { remedyName: e.target.value });
+                                setActiveRemedyDropdownRuleId(rule.id);
+                              }}
                               placeholder={t(
-                                'e.g. Colocynthis / Dioscorea / China',
-                                'যেমন: Colocynth (কলোসিন্থ) / Dioscorea / China'
+                                'Type 1st letter (e.g. C, A, B)...',
+                                'প্রথম অক্ষর লিখুন (যেমন: C, A, B)...'
                               )}
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                             />
+                            {activeRemedyDropdownRuleId === rule.id &&
+                              remedySuggestions.length > 0 && (
+                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-30 max-h-56 overflow-y-auto divide-y divide-slate-100">
+                                  <div className="px-2.5 py-1 bg-slate-50 text-[10px] font-medium text-slate-500 flex items-center justify-between">
+                                    <span>
+                                      {t('Suggested Remedies & Potency', 'সম্ভাব্য ঔষধ ও পাওয়ার')}
+                                    </span>
+                                    <span>{remedySuggestions.length}</span>
+                                  </div>
+                                  {remedySuggestions.map((item) => (
+                                    <div
+                                      key={item.name}
+                                      className="px-2.5 py-1.5 hover:bg-teal-50/70 flex items-center justify-between gap-2 text-xs"
+                                    >
+                                      <button
+                                        type="button"
+                                        onMouseDown={(e) => {
+                                          e.preventDefault();
+                                          updateRule(rule.id, {
+                                            remedyName: item.name,
+                                          });
+                                          setActiveRemedyDropdownRuleId(null);
+                                        }}
+                                        className="flex-1 text-left font-medium text-slate-900 truncate cursor-pointer"
+                                      >
+                                        {item.name}
+                                      </button>
+                                      <div className="flex items-center gap-1 shrink-0">
+                                        {item.potencies.slice(0, 3).map((pot) => (
+                                          <button
+                                            key={pot}
+                                            type="button"
+                                            onMouseDown={(e) => {
+                                              e.preventDefault();
+                                              updateRule(rule.id, {
+                                                remedyName: item.name,
+                                                potency: pot,
+                                              });
+                                              setActiveRemedyDropdownRuleId(null);
+                                            }}
+                                            className="px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-teal-50 text-teal-800 border border-teal-200 rounded hover:bg-teal-700 hover:text-white transition-colors cursor-pointer"
+                                          >
+                                            {pot}
+                                          </button>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
                           </div>
 
-                          <div className="sm:col-span-3">
+                          <div className="sm:col-span-3 relative">
                             <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                              {t('Potency (শক্তি) *', 'শক্তি *')}
+                              {t('Potency (Optional)', 'পাওয়ার / শক্তি (ঐচ্ছিক)')}
                             </label>
                             <input
                               type="text"
-                              required
-                              list="disease-potency-list"
+                              autoComplete="off"
                               maxLength={FIELD_LIMITS.potencyMax}
-                              value={rule.potency}
-                              onChange={(e) => updateRule(rule.id, { potency: e.target.value })}
-                              placeholder="30C / 200C"
-                              className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
+                              value={rule.potency || ''}
+                              onFocus={() => setActivePotencyDropdownRuleId(rule.id)}
+                              onBlur={() => {
+                                window.setTimeout(() => {
+                                  setActivePotencyDropdownRuleId((cur) =>
+                                    cur === rule.id ? null : cur
+                                  );
+                                }, 120);
+                              }}
+                              onChange={(e) => {
+                                updateRule(rule.id, { potency: e.target.value });
+                                setActivePotencyDropdownRuleId(rule.id);
+                              }}
+                              placeholder={t('Optional (30C / 200C)', 'ঐচ্ছিক (30C / 200C)')}
+                              className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                             />
+                            {activePotencyDropdownRuleId === rule.id &&
+                              potencySuggestions.length > 0 && (
+                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-30 max-h-48 overflow-y-auto p-1.5 grid grid-cols-2 gap-1">
+                                  {potencySuggestions.map((pot) => (
+                                    <button
+                                      key={pot}
+                                      type="button"
+                                      onMouseDown={(e) => {
+                                        e.preventDefault();
+                                        updateRule(rule.id, { potency: pot });
+                                        setActivePotencyDropdownRuleId(null);
+                                      }}
+                                      className={`px-2 py-1 text-left text-[11px] font-mono rounded hover:bg-teal-50 hover:text-teal-900 cursor-pointer truncate ${
+                                        rule.potency === pot
+                                          ? 'bg-teal-50 font-semibold text-teal-800'
+                                          : 'text-slate-700'
+                                      }`}
+                                    >
+                                      {pot}
+                                    </button>
+                                  ))}
+                                </div>
+                              )}
                           </div>
 
                           <div className="sm:col-span-4">
@@ -1023,18 +1298,21 @@ export function DiseaseDatabaseView({
                     );
                   })}
                 </div>
+
+                {/* Bottom Quick Add Button so users don't have to scroll up */}
+                <div className="pt-1 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={addRuleRow}
+                    disabled={symptomRules.length >= 50}
+                    className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-teal-800 bg-teal-50 border border-dashed border-teal-400 rounded-lg hover:bg-teal-100 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    {t('Add New Symptom & Remedy', 'নতুন লক্ষণ ও ঔষধ যোগ করুন')} ({symptomRules.length}/50)
+                  </button>
+                </div>
               </div>
 
-              <datalist id="disease-remedy-list">
-                {COMMON_REMEDIES.map((rem) => (
-                  <option key={rem} value={rem} />
-                ))}
-              </datalist>
-              <datalist id="disease-potency-list">
-                {POTENCY_OPTIONS.map((pot) => (
-                  <option key={pot} value={pot} />
-                ))}
-              </datalist>
               <datalist id="disease-unit-list">
                 <option value="৩০ আউন্স" />
                 <option value="১৫ আউন্স" />

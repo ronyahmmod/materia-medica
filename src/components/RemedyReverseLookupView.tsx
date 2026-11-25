@@ -125,10 +125,10 @@ export function RemedyReverseLookupView({
       if (entry.symptomRules && entry.symptomRules.length > 0) {
         for (const rule of entry.symptomRules) {
           const cleanName = rule.remedyName.trim();
-          const cleanPot = rule.potency.trim() || '30C';
+          const cleanPot = (rule.potency || '').trim();
           if (!cleanName) continue;
           medNamesMap.set(cleanName.toLowerCase(), cleanName);
-          potencySet.add(cleanPot);
+          if (cleanPot) potencySet.add(cleanPot);
           flat.push({
             id: `${entry.id}-${rule.id}`,
             remedyName: cleanName,
@@ -146,9 +146,9 @@ export function RemedyReverseLookupView({
       } else {
         if (entry.firstRemedyMorning?.trim()) {
           const cleanName = entry.firstRemedyMorning.trim();
-          const cleanPot = entry.firstRemedyPotency?.trim() || '30C';
+          const cleanPot = (entry.firstRemedyPotency || '').trim();
           medNamesMap.set(cleanName.toLowerCase(), cleanName);
-          potencySet.add(cleanPot);
+          if (cleanPot) potencySet.add(cleanPot);
           flat.push({
             id: `${entry.id}-morning`,
             remedyName: cleanName,
@@ -165,9 +165,9 @@ export function RemedyReverseLookupView({
         }
         if (entry.secondRemedyAfternoon?.trim()) {
           const cleanName = entry.secondRemedyAfternoon.trim();
-          const cleanPot = entry.secondRemedyPotency?.trim() || '30C';
+          const cleanPot = (entry.secondRemedyPotency || '').trim();
           medNamesMap.set(cleanName.toLowerCase(), cleanName);
-          potencySet.add(cleanPot);
+          if (cleanPot) potencySet.add(cleanPot);
           flat.push({
             id: `${entry.id}-afternoon`,
             remedyName: cleanName,
@@ -233,12 +233,12 @@ export function RemedyReverseLookupView({
         groups.set(key, {
           remedyKey: key,
           remedyName: item.remedyName,
-          potencies: [item.potency],
+          potencies: item.potency ? [item.potency] : [],
           diseaseNames: [item.diseaseName],
           indications: [item],
         });
       } else {
-        if (!existing.potencies.includes(item.potency)) {
+        if (item.potency && !existing.potencies.includes(item.potency)) {
           existing.potencies.push(item.potency);
         }
         if (!existing.diseaseNames.includes(item.diseaseName)) {
@@ -469,27 +469,29 @@ export function RemedyReverseLookupView({
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="text-[11px] font-medium text-slate-500 mr-1">
-                    {t('Potencies:', 'শক্তিসমূহ:')}
-                  </span>
-                  {group.potencies.map((pot) => (
-                    <button
-                      key={pot}
-                      type="button"
-                      onClick={() =>
-                        setPotencyFilter((prev) => (prev === pot ? 'all' : pot))
-                      }
-                      className={`px-2 py-0.5 text-[11px] font-mono font-semibold rounded border cursor-pointer transition-colors ${
-                        potencyFilter === pot
-                          ? 'bg-teal-700 text-white border-teal-700'
-                          : 'bg-white text-teal-800 border-teal-300 hover:bg-teal-50'
-                      }`}
-                    >
-                      {pot}
-                    </button>
-                  ))}
-                </div>
+                {group.potencies.length > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <span className="text-[11px] font-medium text-slate-500 mr-1">
+                      {t('Potencies:', 'শক্তিসমূহ:')}
+                    </span>
+                    {group.potencies.map((pot) => (
+                      <button
+                        key={pot}
+                        type="button"
+                        onClick={() =>
+                          setPotencyFilter((prev) => (prev === pot ? 'all' : pot))
+                        }
+                        className={`px-2 py-0.5 text-[11px] font-mono font-semibold rounded border cursor-pointer transition-colors ${
+                          potencyFilter === pot
+                            ? 'bg-teal-700 text-white border-teal-700'
+                            : 'bg-white text-teal-800 border-teal-300 hover:bg-teal-50'
+                        }`}
+                      >
+                        {pot}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
 
               <div className="divide-y divide-slate-200">
@@ -514,9 +516,11 @@ export function RemedyReverseLookupView({
                         >
                           {scopeLabels[ind.patientScope]}
                         </span>
-                        <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded bg-teal-50 text-teal-900 border border-teal-200">
-                          {ind.potency}
-                        </span>
+                        {ind.potency && (
+                          <span className="px-1.5 py-0.5 text-[10px] font-mono font-semibold rounded bg-teal-50 text-teal-900 border border-teal-200">
+                            {ind.potency}
+                          </span>
+                        )}
                         {ind.doseOrUnit && (
                           <span className="px-1.5 py-0.5 text-[10px] font-medium rounded bg-sky-50 text-sky-900 border border-sky-200">
                             {ind.doseOrUnit}
@@ -579,7 +583,7 @@ export function RemedyReverseLookupView({
                   <span>{t('Select Patient to Prescribe', 'চিকিৎসার জন্য রোগী নির্বাচন করুন')}</span>
                 </h2>
                 <p className="text-xs text-slate-500 truncate mt-0.5">
-                  {prescribeTarget.remedyName} {prescribeTarget.potency}
+                  {[prescribeTarget.remedyName, prescribeTarget.potency].filter(Boolean).join(' ')}
                   {prescribeTarget.doseOrUnit ? ` · ${prescribeTarget.doseOrUnit}` : ''} —{' '}
                   {prescribeTarget.diseaseName}
                 </p>

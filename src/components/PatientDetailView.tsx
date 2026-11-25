@@ -74,7 +74,11 @@ import {
 import { ConsultationFormModal } from './ConsultationFormModal';
 import { ConstitutionalMapperCard } from './ConstitutionalMapperCard';
 import { FeeEntryModal } from './FeeEntryModal';
-import { PatientCasePrintView } from './PatientCasePrintView';
+import {
+  DEFAULT_PRINT_REPORT_OPTIONS,
+  PatientCasePrintView,
+  type PrintReportOptions,
+} from './PatientCasePrintView';
 import { SecureClinicalImage } from './SecureClinicalImage';
 
 interface PatientDetailViewProps {
@@ -112,7 +116,7 @@ export function PatientDetailView({
   const [photos, setPhotos] = useState<PatientPhoto[]>([]);
   const [loadingSubdata, setLoadingSubdata] = useState(true);
   const [activeTab, setActiveTab] = useState<
-    'consultations' | 'notes' | 'mapper' | 'photos' | 'fees'
+    'consultations' | 'notes' | 'mapper' | 'photos' | 'fees' | 'summary'
   >('consultations');
 
   const [showConsultationModal, setShowConsultationModal] = useState(false);
@@ -123,6 +127,9 @@ export function PatientDetailView({
   const [savingSettle, setSavingSettle] = useState(false);
   const [confirmDeleteFeeId, setConfirmDeleteFeeId] = useState<string | null>(null);
   const [showPrintView, setShowPrintView] = useState(false);
+  const [printOptions, setPrintOptions] = useState<PrintReportOptions>(
+    DEFAULT_PRINT_REPORT_OPTIONS
+  );
   const [lightboxPhoto, setLightboxPhoto] = useState<PatientPhoto | null>(null);
   const [uploadCategory, setUploadCategory] = useState<PhotoCategory>('symptom');
   const [uploadCaption, setUploadCaption] = useState('');
@@ -765,6 +772,11 @@ export function PatientDetailView({
     setShowFollowUpModal(true);
   };
 
+  const handleQuickPrintCase = () => {
+    setQuickActionOpen(false);
+    window.print();
+  };
+
   const handleSaveFollowUpSchedule = async (e: FormEvent) => {
     e.preventDefault();
     const cleanDate = followUpDateInput.trim().slice(0, 32);
@@ -863,11 +875,23 @@ export function PatientDetailView({
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
-              onClick={() => setShowPrintView(true)}
+              onClick={() => setActiveTab('summary')}
+              className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium border rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                activeTab === 'summary'
+                  ? 'text-teal-900 bg-teal-50 border-teal-300'
+                  : 'text-slate-700 bg-white border-slate-300 hover:bg-slate-50'
+              }`}
+            >
+              <FileText className="w-3.5 h-3.5" />
+              {t('Print Summary', 'প্রিন্ট সারসংক্ষেপ')}
+            </button>
+            <button
+              type="button"
+              onClick={() => window.print()}
               className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
             >
               <Printer className="w-3.5 h-3.5" />
-              {t('Print Patient Report', 'রোগীর রিপোর্ট প্রিন্ট করুন')}
+              {t('Print Directly', 'সরাসরি প্রিন্ট')}
             </button>
             <button
               type="button"
@@ -1097,6 +1121,18 @@ export function PatientDetailView({
             <Banknote className="w-3.5 h-3.5 text-teal-700" />
             {t('Cash Fees', 'নগদ ফি')} ({visibleFeeRecords.length})
           </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('summary')}
+            className={`inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium rounded-md transition-colors cursor-pointer whitespace-nowrap ${
+              activeTab === 'summary'
+                ? 'bg-white text-teal-900 shadow-xs'
+                : 'text-slate-600 hover:text-slate-900'
+            }`}
+          >
+            <Printer className="w-3.5 h-3.5 text-teal-700" />
+            {t('Print Summary', 'প্রিন্ট সারসংক্ষেপ')}
+          </button>
         </div>
 
         {!confirmDeletePatient ? (
@@ -1133,8 +1169,33 @@ export function PatientDetailView({
           </div>
         )}
       </div>
+      </div>
 
       {/* Tab Content */}
+      {activeTab === 'summary' ? (
+        !showPrintView ? (
+          <div className="mt-6 print:mt-0">
+            <PatientCasePrintView
+              embedded
+              patient={patient}
+              consultations={consultations}
+              clinicalNotes={clinicalNotes}
+              photos={photos}
+              feeRecords={visibleFeeRecords}
+              clinicName={clinic.clinicName}
+              clinicTagline={clinic.tagline}
+              practitionerName={clinic.practitionerName}
+              clinicPhone={clinic.phone}
+              clinicAddress={clinic.address}
+              options={printOptions}
+              onOptionsChange={setPrintOptions}
+              onOpenFullScreenPreview={() => setShowPrintView(true)}
+              onClose={() => setShowPrintView(false)}
+            />
+          </div>
+        ) : null
+      ) : (
+        <div className="mt-6 space-y-6 print:hidden">
       {activeTab === 'consultations' ? (
         <div className="space-y-4">
           {loadingSubdata ? (
@@ -1232,10 +1293,12 @@ export function PatientDetailView({
                         </div>
                       ) : (
                         <h3 className="font-display text-base font-semibold text-slate-900">
-                          {con.remedyName}{' '}
-                          <span className="font-mono text-sm font-medium text-teal-800 ml-1">
-                            {con.potency}
-                          </span>
+                          {con.remedyName}
+                          {con.potency && (
+                            <span className="font-mono text-sm font-medium text-teal-800 ml-1.5">
+                              {con.potency}
+                            </span>
+                          )}
                         </h3>
                       )}
 
@@ -2165,7 +2228,10 @@ export function PatientDetailView({
           )}
         </div>
       )}
+        </div>
+      )}
 
+      <div className="print:hidden">
       {showConsultationModal && (
         <ConsultationFormModal
           clinic={clinic}
@@ -2437,6 +2503,22 @@ export function PatientDetailView({
                   </p>
                 </div>
               </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={handleQuickPrintCase}
+                className="w-full flex items-start gap-3 px-2.5 py-2.5 text-left rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
+              >
+                <Printer className={`w-4 h-4 mt-0.5 shrink-0 ${palette.navIconActive}`} />
+                <div className="min-w-0">
+                  <p className="text-xs font-semibold text-slate-900">
+                    {t('Print Case & Remedy Log', 'কেস ও ওষুধ লগ প্রিন্ট করুন')}
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    {t('Print summary sheet directly', 'সরাসরি প্রিন্ট বা PDF সংরক্ষণ')}
+                  </p>
+                </div>
+              </button>
             </div>
           )}
 
@@ -2463,19 +2545,24 @@ export function PatientDetailView({
       )}
       </div>
 
-      <PatientCasePrintView
-        patient={patient}
-        consultations={consultations}
-        clinicalNotes={clinicalNotes}
-        photos={photos}
-        feeRecords={visibleFeeRecords}
-        clinicName={clinic.clinicName}
-        practitionerName={clinic.practitionerName}
-        clinicPhone={clinic.phone}
-        clinicAddress={clinic.address}
-        printOnly={!showPrintView}
-        onClose={() => setShowPrintView(false)}
-      />
+      {(activeTab !== 'summary' || showPrintView) && (
+        <PatientCasePrintView
+          patient={patient}
+          consultations={consultations}
+          clinicalNotes={clinicalNotes}
+          photos={photos}
+          feeRecords={visibleFeeRecords}
+          clinicName={clinic.clinicName}
+          clinicTagline={clinic.tagline}
+          practitionerName={clinic.practitionerName}
+          clinicPhone={clinic.phone}
+          clinicAddress={clinic.address}
+          printOnly={!showPrintView}
+          options={printOptions}
+          onOptionsChange={setPrintOptions}
+          onClose={() => setShowPrintView(false)}
+        />
+      )}
     </>
   );
 }

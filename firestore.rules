@@ -246,7 +246,7 @@ service cloud.firestore {
     function isValidConsultationBase(data, patientId, requireTenantFields) {
       return data.keys().hasAll([
           'patientId', 'visitDate', 'presentingSymptoms',
-          'remedyName', 'potency', 'dosage',
+          'remedyName', 'dosage',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
@@ -284,7 +284,7 @@ service cloud.firestore {
         && isOptionalString(data, 'extraPotency', 32)
         && isOptionalString(data, 'biochemicMedicine', 160)
         && data.remedyName is string && data.remedyName.size() >= 1 && data.remedyName.size() <= 160
-        && data.potency is string && data.potency.size() >= 1 && data.potency.size() <= 32
+        && isOptionalString(data, 'potency', 32)
         && data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 200
         && isOptionalString(data, 'clinicalNotes', 2000)
         && isOptionalString(data, 'nextFollowUpDate', 32)
@@ -396,7 +396,7 @@ service cloud.firestore {
     function isValidDiseaseRemedyEntryBase(data, requireTenantFields) {
       return data.keys().hasAll([
           'patientScope', 'diseaseName', 'symptoms',
-          'firstRemedyMorning', 'firstRemedyPotency',
+          'firstRemedyMorning',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
@@ -422,12 +422,12 @@ service cloud.firestore {
             data.symptomRules.size() == 0
             || (
               data.symptomRules[0] is map
-              && data.symptomRules[0].keys().hasAll(['id', 'symptom', 'remedyName', 'potency', 'timing'])
+              && data.symptomRules[0].keys().hasAll(['id', 'symptom', 'remedyName', 'timing'])
               && data.symptomRules[0].keys().hasOnly(['id', 'symptom', 'remedyName', 'potency', 'doseOrUnit', 'timing', 'notes'])
               && data.symptomRules[0].id is string && data.symptomRules[0].id.size() >= 1 && data.symptomRules[0].id.size() <= 64
               && data.symptomRules[0].symptom is string && data.symptomRules[0].symptom.size() >= 1 && data.symptomRules[0].symptom.size() <= 500
               && data.symptomRules[0].remedyName is string && data.symptomRules[0].remedyName.size() >= 1 && data.symptomRules[0].remedyName.size() <= 160
-              && data.symptomRules[0].potency is string && data.symptomRules[0].potency.size() >= 1 && data.symptomRules[0].potency.size() <= 32
+              && isOptionalString(data.symptomRules[0], 'potency', 32)
               && isOptionalString(data.symptomRules[0], 'doseOrUnit', 64)
               && data.symptomRules[0].timing is string && data.symptomRules[0].timing in ['general', 'morning', 'afternoon', 'companion-morning', 'companion-afternoon', 'biochemic']
               && isOptionalString(data.symptomRules[0], 'notes', 300)
@@ -435,7 +435,7 @@ service cloud.firestore {
           )
         ))
         && data.firstRemedyMorning is string && data.firstRemedyMorning.size() >= 1 && data.firstRemedyMorning.size() <= 160
-        && data.firstRemedyPotency is string && data.firstRemedyPotency.size() >= 1 && data.firstRemedyPotency.size() <= 32
+        && isOptionalString(data, 'firstRemedyPotency', 32)
         && isOptionalString(data, 'secondRemedyAfternoon', 160)
         && isOptionalString(data, 'secondRemedyPotency', 32)
         && isOptionalString(data, 'dosageInstructions', 200)

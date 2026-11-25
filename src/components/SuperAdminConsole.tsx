@@ -13,12 +13,9 @@ import {
   ArchiveRestore,
   ArrowRight,
   Building2,
-  Check,
-  Copy,
   CreditCard,
   Database,
   Edit3,
-  ExternalLink,
   HardDrive,
   Loader2,
   PauseCircle,
@@ -42,7 +39,6 @@ import { formatBytes } from '../lib/imageCompressor';
 import { type SaasPlatformHealthResponse } from '../lib/photoApi';
 import {
   ACCENT_THEME_PALETTES,
-  buildClinicShareUrl,
   DEFAULT_PLATFORM_CONFIG_ID,
   isPrivateDevPreviewUrl,
   sanitizeShareBaseUrl,
@@ -141,7 +137,6 @@ export function SuperAdminConsole({
   const billingLabels = BILLING_CYCLE_LABELS_I18N[language];
 
   const [activeTab, setActiveTab] = useState<ConsoleTab>('clients');
-  const [copiedClinicId, setCopiedClinicId] = useState<string | null>(null);
   const [togglingClinicId, setTogglingClinicId] = useState<string | null>(null);
   const [confirmDeleteClinicId, setConfirmDeleteClinicId] = useState<string | null>(null);
   const [deletingClinicId, setDeletingClinicId] = useState<string | null>(null);
@@ -227,17 +222,6 @@ export function SuperAdminConsole({
       .map(([cur, val]) => `${cur}${Math.round(val).toLocaleString()}`)
       .join(' + ');
   }, [counts.mrrByCurrency]);
-
-  const handleCopyShareUrl = async (clinic: ClinicTenant) => {
-    const shareUrl = buildClinicShareUrl(clinic.slug, platformConfig.publicBaseUrl);
-    try {
-      await navigator.clipboard.writeText(shareUrl);
-      setCopiedClinicId(clinic.id);
-      window.setTimeout(() => setCopiedClinicId(null), 2000);
-    } catch {
-      // Ignore clipboard failures
-    }
-  };
 
   const handleToggleSuspend = async (clinic: ClinicTenant) => {
     const nextStatus = clinic.subscriptionStatus === 'suspended' ? 'active' : 'suspended';
@@ -1174,7 +1158,6 @@ export function SuperAdminConsole({
                   <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500">
                     <th className="py-3 px-4 whitespace-nowrap">{t('Clinic & Branding', 'ক্লিনিক ও ব্র্যান্ডিং')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Client Access', 'ক্লায়েন্ট অ্যাক্সেস')}</th>
-                    <th className="py-3 px-4 whitespace-nowrap">{t('Shareable Client URL', 'শেয়ারযোগ্য URL')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Plan & Storage', 'প্ল্যান ও স্টোরেজ')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Status', 'অবস্থা')}</th>
                     <th className="py-3 px-4 whitespace-nowrap text-right">{t('Actions', 'কার্যক্রম')}</th>
@@ -1184,7 +1167,6 @@ export function SuperAdminConsole({
                   {clinics.map((clinic) => {
                     const palette =
                       ACCENT_THEME_PALETTES[clinic.accentColor] || ACCENT_THEME_PALETTES.teal;
-                    const shareUrl = buildClinicShareUrl(clinic.slug, platformConfig.publicBaseUrl);
                     const diskStats = saasHealth?.storage.byClinic[clinic.id];
                     const isSuspended = clinic.subscriptionStatus === 'suspended';
                     const isConfirmingDelete = confirmDeleteClinicId === clinic.id;
@@ -1224,42 +1206,6 @@ export function SuperAdminConsole({
                               </span>
                             )}
                           </p>
-                        </td>
-
-                        <td className="py-3.5 px-4 align-top">
-                          <div className="flex items-center gap-1.5">
-                            <code className="font-mono text-[11px] text-slate-800 bg-slate-50 border border-slate-200 rounded px-2 py-1 max-w-[200px] truncate">
-                              /{clinic.slug}
-                            </code>
-                            <button
-                              type="button"
-                              onClick={() => handleCopyShareUrl(clinic)}
-                              title={shareUrl}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-slate-700 bg-white border border-slate-200 rounded hover:bg-slate-100 cursor-pointer whitespace-nowrap"
-                            >
-                              {copiedClinicId === clinic.id ? (
-                                <>
-                                  <Check className="w-3 h-3 text-emerald-700" />
-                                  {t('Copied', 'কপি')}
-                                </>
-                              ) : (
-                                <>
-                                  <Copy className="w-3 h-3" />
-                                  {t('Copy', 'কপি')}
-                                </>
-                              )}
-                            </button>
-                            <a
-                              href={shareUrl}
-                              title={t(
-                                'Open Client Login URL (requires client email & password)',
-                                'ক্লায়েন্ট লগইন URL খুলুন (ক্লায়েন্ট ইমেইল ও পাসওয়ার্ড প্রয়োজন)'
-                              )}
-                              className="p-1 text-slate-500 hover:text-slate-900"
-                            >
-                              <ExternalLink className="w-3.5 h-3.5" />
-                            </a>
-                          </div>
                         </td>
 
                         <td className="py-3.5 px-4 align-top tabular-nums">
