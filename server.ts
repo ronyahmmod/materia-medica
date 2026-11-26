@@ -32,7 +32,29 @@ interface AuthenticatedRequest extends Request {
   storageLimitMb?: number;
 }
 
-const PORT = Number(process.env.PORT) || 3000;
+function resolveListenPort(): number {
+  const portFlagIdx = process.argv.findIndex((arg) => arg === '--port' || arg.startsWith('--port='));
+  if (portFlagIdx !== -1) {
+    const arg = process.argv[portFlagIdx];
+    const raw = arg.startsWith('--port=') ? arg.slice('--port='.length) : process.argv[portFlagIdx + 1];
+    const parsed = Number(raw);
+    if (Number.isInteger(parsed) && parsed > 0 && parsed <= 65535) {
+      return parsed;
+    }
+  }
+  const envPort = Number(process.env.PORT);
+  const nginxPort = Number(process.env.NGINX_PORT);
+  if (
+    process.env.NODE_ENV !== 'production' &&
+    nginxPort > 0 &&
+    envPort === nginxPort
+  ) {
+    return Number(process.env.DEFAULT_APP_PORT) || 3000;
+  }
+  return Number.isInteger(envPort) && envPort > 0 ? envPort : 3000;
+}
+
+const PORT = resolveListenPort();
 const ROOT_DIR = process.cwd();
 const UPLOAD_ROOT = path.resolve(ROOT_DIR, process.env.UPLOAD_STORAGE_DIR || 'data/uploads');
 const MAX_DECODED_BYTES = 1_572_864; // 1.5 MB per compressed clinical image
