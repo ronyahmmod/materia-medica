@@ -359,6 +359,11 @@ export function DiseaseProtocolModal({
         let entryGetOk = 'na';
         let isDelStr = 'na';
         let cAtTs = 'na';
+        let eCid = 'na';
+        let eCby = 'na';
+        let eKeysBad = 'na';
+        let eNulls = 'na';
+        let eMiss = 'na';
         if (existingEntry) {
           try {
             const eSnap = await getDocFromServer(tenantDiseaseRemedyDoc(clinic.id, entryId));
@@ -367,11 +372,43 @@ export function DiseaseProtocolModal({
               const eData = eSnap.data() as Record<string, unknown>;
               isDelStr = String(eData.isDeleted);
               cAtTs = String(eData.createdAt instanceof Timestamp);
+              eCid =
+                'clinicId' in eData
+                  ? typeof eData.clinicId === 'string' && eData.clinicId === clinic.id
+                    ? 'match'
+                    : `${typeof eData.clinicId}:${String(eData.clinicId)}`
+                  : 'MISSING';
+              eCby =
+                'createdBy' in eData
+                  ? typeof eData.createdBy === 'string' && eData.createdBy.length > 0
+                    ? `ok:${eData.createdBy.length}`
+                    : `${typeof eData.createdBy}:${String(eData.createdBy)}`
+                  : 'MISSING';
+              eKeysBad = Object.keys(eData).filter((k) => !allowedKeys.has(k)).join(',') || 'none';
+              eNulls = Object.keys(eData).filter((k) => eData[k] === null).join(',') || 'none';
+              eMiss =
+                [
+                  'patientScope',
+                  'diseaseName',
+                  'symptoms',
+                  'firstRemedyMorning',
+                  'createdBy',
+                  'createdAt',
+                  'updatedAt',
+                ]
+                  .filter((k) => !(k in eData))
+                  .join(',') || 'none';
             }
           } catch {
             entryGetOk = 'denied';
           }
         }
+
+        const r0 = sanitizedRules[0];
+        const r0Info = r0
+          ? `${r0.id.length}/${r0.symptom.length}/${r0.remedyName.length}/${(r0.potency || '').length}/${(r0.doseOrUnit || '').length}/${(r0.notes || '').length}/${r0.timing}`
+          : 'none';
+        const pLens = `${cleanDisease.length}/${(combinedSymptoms || cleanDisease).length}/${morningRule.remedyName.length}/${(morningRule.potency || '').length}/${(afternoonRule?.remedyName || '').length}/${dosageInstructions.trim().length}/${clinicalNotes.trim().length}`;
 
         const flags = [
           `op:${op}`,
@@ -381,13 +418,17 @@ export function DiseaseProtocolModal({
           `uEq:${uidsExact}`,
           `uidOk:${uidOk}`,
           `emailOk:${emailOk}`,
-          `cId:${Boolean(existingEntry?.clinicId ?? true)}`,
-          `cBy:${Boolean(existingEntry?.createdBy ?? true)}`,
-          `cAt:${Boolean(existingEntry?.createdAt ?? true)}`,
+          `eCid:${eCid}`,
+          `eCby:${eCby}`,
           `cAtTs:${cAtTs}`,
           `isDel:${isDelStr}`,
+          `eBad:${eKeysBad}`,
+          `eNull:${eNulls}`,
+          `eMiss:${eMiss}`,
           `idOk:${/^[a-zA-Z0-9_-]{1,128}$/.test(entryId)}`,
           `rLen:${sanitizedRules.length}`,
+          `r0:${r0Info}`,
+          `pLen:${pLens}`,
           ...(extraKeys.length > 0 ? [`extra:${extraKeys.join(',')}`] : []),
         ].join(' ');
         const diag = `[${signedInEmail} · ${providerId} · status:${clinic.subscriptionStatus} · ${flags}] ${msg}`;

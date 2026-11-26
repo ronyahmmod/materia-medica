@@ -970,8 +970,8 @@ service cloud.firestore {
           && isClinicWritable(clinicId)
           && isValidDiseaseRemedyEntryBase(incoming(), true)
           && (
-            ('clinicId' in existing() && incoming().clinicId == existing().clinicId)
-            || (!('clinicId' in existing()) && incoming().clinicId == clinicId)
+            ('clinicId' in existing() && existing().clinicId is string && existing().clinicId.size() >= 1 && incoming().clinicId == existing().clinicId)
+            || ((!('clinicId' in existing()) || !(existing().clinicId is string) || existing().clinicId.size() == 0) && incoming().clinicId == clinicId)
           )
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
