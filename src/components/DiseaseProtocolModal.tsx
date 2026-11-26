@@ -303,10 +303,13 @@ export function DiseaseProtocolModal({
         path
       );
       if (msg.toLowerCase().includes('permission')) {
+        const signedInEmail = auth.currentUser?.email || 'unknown';
+        const providerId = auth.currentUser?.providerData?.[0]?.providerId || 'unknown';
+        const diag = `[${signedInEmail} · ${providerId} · status:${clinic.subscriptionStatus}] ${msg}`;
         setFormError(
           t(
-            'Permission denied while saving. Please refresh the page or check clinic access permissions.',
-            'সংরক্ষণের অনুমতি পাওয়া যায়নি। পেজ রিলোড করে আবার চেষ্টা করুন।'
+            `Permission denied while saving (${diag}). Please refresh the page or check clinic access permissions.`,
+            `সংরক্ষণের অনুমতি পাওয়া যায়নি (${diag})। পেজ রিলোড করে আবার চেষ্টা করুন বা ক্লিনিক অ্যাক্সেস যাচাই করুন।`
           )
         );
       } else {
