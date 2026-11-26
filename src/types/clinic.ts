@@ -114,6 +114,8 @@ export interface ClinicTenant {
   monthlyFeeAmount: number;
   billingCycle: BillingCycle;
   subscriptionNotes?: string;
+  lastActiveAt?: Timestamp;
+  lastActiveEmail?: string;
   createdBy: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;

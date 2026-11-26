@@ -1,15 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   onSnapshot,
   query,
-  serverTimestamp,
-  setDoc,
   updateDoc,
   where,
 } from 'firebase/firestore';
 import {
   BookMarked,
-  CopyPlus,
   Edit3,
   Plus,
   Search,
@@ -18,13 +15,14 @@ import {
   UserCheck,
   X,
 } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   DISEASE_SCOPE_LABELS_I18N,
   PATIENT_TYPE_LABELS_I18N,
   REMEDY_TIMING_LABELS_I18N,
 } from '../i18n/translations';
+import { deriveRulesFromDiseaseEntry } from '../lib/diseaseCatalog';
 import {
   ACCENT_THEME_PALETTES,
   buildSoftDeletePayload,
@@ -32,22 +30,18 @@ import {
   tenantDiseaseRemedyDoc,
 } from '../lib/tenantPaths';
 import {
-  COMMON_REMEDIES,
-  DISEASE_ENTRY_RULE_TYPES,
   DISEASE_PATIENT_SCOPES,
-  FIELD_LIMITS,
-  POTENCY_OPTIONS,
   type ClinicTenant,
   type DiseasePatientScope,
   type DiseaseRemedyEntry,
   type DiseaseSymptomRule,
   type Patient,
-  type RemedyRuleTiming,
 } from '../types/clinic';
 import {
   ConsultationFormModal,
   type ConsultationPrefill,
 } from './ConsultationFormModal';
+import { DiseaseProtocolModal } from './DiseaseProtocolModal';
 import { SecureClinicalImage } from './SecureClinicalImage';
 
 interface DiseaseDatabaseViewProps {
@@ -55,57 +49,6 @@ interface DiseaseDatabaseViewProps {
   patients: Patient[];
   isSuperAdmin: boolean;
   onConsultationSaved: (patientId: string) => void;
-}
-
-function createEmptyRule(timing: RemedyRuleTiming = 'general'): DiseaseSymptomRule {
-  return {
-    id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
-    symptom: '',
-    remedyName: '',
-    potency: '',
-    doseOrUnit: '',
-    timing,
-    notes: '',
-  };
-}
-
-function deriveRulesFromLegacyEntry(entry: DiseaseRemedyEntry): DiseaseSymptomRule[] {
-  if (entry.symptomRules && entry.symptomRules.length > 0) {
-    return entry.symptomRules.map((r) => ({
-      id: r.id || `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
-      symptom: r.symptom || '',
-      remedyName: r.remedyName || '',
-      potency: r.potency || '',
-      doseOrUnit: r.doseOrUnit || '',
-      timing: r.timing || 'general',
-      notes: r.notes || '',
-    }));
-  }
-
-  const rules: DiseaseSymptomRule[] = [
-    {
-      id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
-      symptom: entry.symptoms || entry.diseaseName,
-      remedyName: entry.firstRemedyMorning || '',
-      potency: entry.firstRemedyPotency || '',
-      doseOrUnit: '',
-      timing: 'general',
-      notes: '',
-    },
-  ];
-
-  if (entry.secondRemedyAfternoon?.trim()) {
-    rules.push({
-      id: `rule_${crypto.randomUUID().replace(/-/g, '').slice(0, 10)}`,
-      symptom: entry.symptoms || entry.diseaseName,
-      remedyName: entry.secondRemedyAfternoon.trim(),
-      potency: entry.secondRemedyPotency?.trim() || '',
-      doseOrUnit: '',
-      timing: 'general',
-      notes: '',
-    });
-  }
-  return rules;
 }
 
 export function DiseaseDatabaseView({
@@ -130,17 +73,6 @@ export function DiseaseDatabaseView({
   // Add / Edit Disease Entry Modal State (Multi-Symptom -> Multi-Remedy)
   const [showFormModal, setShowFormModal] = useState(false);
   const [editingEntry, setEditingEntry] = useState<DiseaseRemedyEntry | null>(null);
-  const [patientScope, setPatientScope] = useState<DiseasePatientScope>('All');
-  const [diseaseName, setDiseaseName] = useState('');
-  const [symptomRules, setSymptomRules] = useState<DiseaseSymptomRule[]>([createEmptyRule('general')]);
-  const [dosageInstructions, setDosageInstructions] = useState('');
-  const [clinicalNotes, setClinicalNotes] = useState('');
-  const [submitting, setSubmitting] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [activeRemedyDropdownRuleId, setActiveRemedyDropdownRuleId] = useState<string | null>(null);
-  const [activePotencyDropdownRuleId, setActivePotencyDropdownRuleId] = useState<string | null>(null);
-  const [lastAddedRuleId, setLastAddedRuleId] = useState<string | null>(null);
-  const ruleCardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   // Prescribe to Selected Patient Flow
   const [prescribePrefill, setPrescribePrefill] = useState<ConsultationPrefill | null>(null);
@@ -245,310 +177,14 @@ export function DiseaseDatabaseView({
     });
   }, [patients, patientPickerQuery, prescribePrefill, prescribeScope]);
 
-  // Build unified remedy & potency suggestion catalogs from clinic DB + standard materia medica
-  const { remedyCatalog, potencyCatalog } = useMemo(() => {
-    const BIOCHEMIC_DEFAULTS = new Set([
-      'calcarea fluorica',
-      'calcarea phosphorica',
-      'calcarea sulphurica',
-      'ferrum phosphoricum',
-      'kali muriaticum',
-      'kali phosphoricum',
-      'kali sulphuricum',
-      'magnesia phosphorica',
-      'natrum muriaticum',
-      'natrum phosphoricum',
-      'natrum sulphuricum',
-      'silicea',
-    ]);
-
-    const remedyMap = new Map<
-      string,
-      { name: string; potencies: string[]; savedCount: number }
-    >();
-    const potencySet = new Set<string>(POTENCY_OPTIONS);
-
-    const recordPair = (rawName: string, rawPotency?: string, isSaved = false) => {
-      const name = rawName.trim();
-      if (!name) return;
-      const key = name.toLowerCase();
-      const pot = (rawPotency || '').trim();
-      if (pot) potencySet.add(pot);
-
-      let item = remedyMap.get(key);
-      if (!item) {
-        item = { name, potencies: [], savedCount: 0 };
-        remedyMap.set(key, item);
-      }
-      if (isSaved) item.savedCount += 1;
-      if (pot && !item.potencies.some((p) => p.toLowerCase() === pot.toLowerCase())) {
-        item.potencies.push(pot);
-      }
-    };
-
-    for (const entry of entries) {
-      const rules = deriveRulesFromLegacyEntry(entry);
-      for (const r of rules) {
-        recordPair(r.remedyName, r.potency, true);
-      }
-    }
-
-    for (const r of symptomRules) {
-      recordPair(r.remedyName, r.potency, false);
-    }
-
-    for (const rem of COMMON_REMEDIES) {
-      const key = rem.toLowerCase();
-      if (!remedyMap.has(key)) {
-        const defaultPotencies = BIOCHEMIC_DEFAULTS.has(key)
-          ? ['6X', '12X', '30C']
-          : ['30C', '200C', '1M'];
-        remedyMap.set(key, { name: rem, potencies: defaultPotencies, savedCount: 0 });
-      } else {
-        const existing = remedyMap.get(key)!;
-        if (existing.potencies.length === 0) {
-          existing.potencies = BIOCHEMIC_DEFAULTS.has(key)
-            ? ['6X', '12X', '30C']
-            : ['30C', '200C', '1M'];
-        }
-      }
-    }
-
-    const sortedRemedies = Array.from(remedyMap.values()).sort(
-      (a, b) => b.savedCount - a.savedCount || a.name.localeCompare(b.name)
-    );
-
-    return {
-      remedyCatalog: sortedRemedies,
-      potencyCatalog: Array.from(potencySet),
-    };
-  }, [entries, symptomRules]);
-
-  const getRemedySuggestions = (queryText: string) => {
-    const q = queryText.trim().toLowerCase();
-    if (!q) {
-      return remedyCatalog.slice(0, 10);
-    }
-    const prefixMatches: typeof remedyCatalog = [];
-    const wordMatches: typeof remedyCatalog = [];
-    const substringMatches: typeof remedyCatalog = [];
-
-    for (const item of remedyCatalog) {
-      const lower = item.name.toLowerCase();
-      if (lower.startsWith(q)) {
-        prefixMatches.push(item);
-      } else if (lower.split(/[\s(/]+/).some((part) => part.startsWith(q))) {
-        wordMatches.push(item);
-      } else if (lower.includes(q)) {
-        substringMatches.push(item);
-      }
-    }
-    return [...prefixMatches, ...wordMatches, ...substringMatches].slice(0, 12);
-  };
-
-  const getPotencySuggestions = (queryText: string) => {
-    const q = queryText.trim().toLowerCase();
-    if (!q) return potencyCatalog.slice(0, 12);
-    const starts: string[] = [];
-    const contains: string[] = [];
-    for (const pot of potencyCatalog) {
-      const lower = pot.toLowerCase();
-      if (lower.startsWith(q)) starts.push(pot);
-      else if (lower.includes(q)) contains.push(pot);
-    }
-    return [...starts, ...contains].slice(0, 12);
-  };
-
-  useEffect(() => {
-    if (!lastAddedRuleId) return;
-    const el = ruleCardRefs.current[lastAddedRuleId];
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-    }
-    setLastAddedRuleId(null);
-  }, [lastAddedRuleId, symptomRules.length]);
-
   const openCreateModal = () => {
     setEditingEntry(null);
-    setPatientScope(scopeFilter === 'all' ? 'All' : scopeFilter);
-    setDiseaseName('');
-    setSymptomRules([createEmptyRule('general')]);
-    setDosageInstructions('');
-    setClinicalNotes('');
-    setFormError(null);
-    setActiveRemedyDropdownRuleId(null);
-    setActivePotencyDropdownRuleId(null);
     setShowFormModal(true);
   };
 
   const openEditModal = (entry: DiseaseRemedyEntry) => {
     setEditingEntry(entry);
-    setPatientScope(entry.patientScope || 'All');
-    setDiseaseName(entry.diseaseName);
-    setSymptomRules(deriveRulesFromLegacyEntry(entry));
-    setDosageInstructions(entry.dosageInstructions || '');
-    setClinicalNotes(entry.clinicalNotes || '');
-    setFormError(null);
-    setActiveRemedyDropdownRuleId(null);
-    setActivePotencyDropdownRuleId(null);
     setShowFormModal(true);
-  };
-
-  const updateRule = (id: string, patch: Partial<DiseaseSymptomRule>) => {
-    setSymptomRules((prev) => prev.map((r) => (r.id === id ? { ...r, ...patch } : r)));
-  };
-
-  const addRuleRow = () => {
-    if (symptomRules.length >= 50) return;
-    const nextRule = createEmptyRule('general');
-    setSymptomRules((prev) => [...prev, nextRule]);
-    setLastAddedRuleId(nextRule.id);
-  };
-
-  const addAnotherRemedyForSameSymptom = (sourceRule: DiseaseSymptomRule) => {
-    if (symptomRules.length >= 50) return;
-    const nextRule: DiseaseSymptomRule = {
-      ...createEmptyRule(sourceRule.timing || 'general'),
-      symptom: sourceRule.symptom,
-      notes: sourceRule.notes || '',
-    };
-    setSymptomRules((prev) => {
-      const idx = prev.findIndex((r) => r.id === sourceRule.id);
-      if (idx === -1) return [...prev, nextRule];
-      const copy = [...prev];
-      copy.splice(idx + 1, 0, nextRule);
-      return copy;
-    });
-    setLastAddedRuleId(nextRule.id);
-  };
-
-  const removeRuleRow = (id: string) => {
-    if (symptomRules.length <= 1) return;
-    setSymptomRules((prev) => prev.filter((r) => r.id !== id));
-  };
-
-  const handleSaveEntry = async (e: FormEvent) => {
-    e.preventDefault();
-    setFormError(null);
-
-    const cleanDisease = diseaseName.trim();
-    if (!cleanDisease) {
-      setFormError(t('Disease name is required.', 'রোগের নাম আবশ্যক।'));
-      return;
-    }
-
-    const sanitizedRules: DiseaseSymptomRule[] = [];
-    for (const rule of symptomRules) {
-      const sym = rule.symptom.trim();
-      const rem = rule.remedyName.trim();
-      const pot = (rule.potency || '').trim();
-      if (!sym || !rem) {
-        setFormError(
-          t(
-            'Every symptom row requires Symptom and Remedy Name.',
-            'প্রতিটি সারিতে লক্ষণ এবং ঔষধের নাম পূরণ করা আবশ্যক।'
-          )
-        );
-        return;
-      }
-      const cleanRule: DiseaseSymptomRule = {
-        id: (rule.id || `rule_${crypto.randomUUID().slice(0, 8)}`).slice(0, 64),
-        symptom: sym.slice(0, FIELD_LIMITS.ruleSymptomMax),
-        remedyName: rem.slice(0, FIELD_LIMITS.remedyNameMax),
-        potency: pot.slice(0, FIELD_LIMITS.potencyMax),
-        timing: rule.timing || 'general',
-      };
-      if (rule.doseOrUnit?.trim()) {
-        cleanRule.doseOrUnit = rule.doseOrUnit.trim().slice(0, FIELD_LIMITS.ruleUnitMax);
-      }
-      if (rule.notes?.trim()) {
-        cleanRule.notes = rule.notes.trim().slice(0, FIELD_LIMITS.ruleNotesMax);
-      }
-      sanitizedRules.push(cleanRule);
-    }
-
-    if (sanitizedRules.length === 0) {
-      setFormError(
-        t('Add at least one symptom-to-remedy rule.', 'কমপক্ষে একটি লক্ষণ ও ঔষধের নিয়ম যোগ করুন।')
-      );
-      return;
-    }
-
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setFormError(t('Admin sign-in is required.', 'অ্যাডমিন সাইন-ইন প্রয়োজন।'));
-      return;
-    }
-
-    // Derive summary fields cleanly from structured rules
-    const combinedSymptoms = sanitizedRules
-      .map((r) => {
-        const remLabel = [r.remedyName, r.potency].filter(Boolean).join(' ');
-        return r.doseOrUnit ? `${r.symptom} [${remLabel} · ${r.doseOrUnit}]` : r.symptom;
-      })
-      .join('\n')
-      .slice(0, FIELD_LIMITS.diseaseSymptomsMax);
-
-    const morningRule =
-      sanitizedRules.find((r) => r.timing === 'morning') ||
-      sanitizedRules.find((r) => r.timing !== 'biochemic') ||
-      sanitizedRules[0];
-    const afternoonRule =
-      sanitizedRules.find((r) => r.timing === 'afternoon') ||
-      sanitizedRules.find((r) => r.id !== morningRule.id && r.timing !== 'biochemic');
-
-    const entryId =
-      editingEntry?.id || `dis_${crypto.randomUUID().replace(/-/g, '').slice(0, 16)}`;
-    const path = `clinics/${clinic.id}/disease_remedies/${entryId}`;
-
-    setSubmitting(true);
-    try {
-      const payload: Record<string, unknown> = {
-        patientScope,
-        diseaseName: cleanDisease.slice(0, FIELD_LIMITS.diseaseNameMax),
-        symptoms: combinedSymptoms,
-        symptomRules: sanitizedRules,
-        firstRemedyMorning: morningRule.remedyName.slice(0, FIELD_LIMITS.remedyNameMax),
-        firstRemedyPotency: (morningRule.potency || '').slice(0, FIELD_LIMITS.potencyMax),
-        secondRemedyAfternoon: afternoonRule
-          ? afternoonRule.remedyName.slice(0, FIELD_LIMITS.remedyNameMax)
-          : '',
-        secondRemedyPotency: afternoonRule
-          ? (afternoonRule.potency || '').slice(0, FIELD_LIMITS.potencyMax)
-          : '',
-        dosageInstructions: dosageInstructions.trim().slice(0, FIELD_LIMITS.dosageMax),
-        clinicalNotes: clinicalNotes.trim().slice(0, FIELD_LIMITS.symptomNotesMax),
-        updatedAt: serverTimestamp(),
-      };
-
-      if (editingEntry) {
-        await updateDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), payload);
-      } else {
-        payload.clinicId = clinic.id;
-        payload.clinicAccessEmails = clinic.accessEmails;
-        payload.clinicAccessUids = clinic.authorizedUids || [];
-        payload.createdBy = uid;
-        payload.createdAt = serverTimestamp();
-        await setDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), payload);
-      }
-
-      setShowFormModal(false);
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          editingEntry ? OperationType.UPDATE : OperationType.CREATE,
-          path
-        );
-      }
-      setFormError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to save disease protocol.', 'রোগ ও ঔষধের তথ্য সংরক্ষণ করা যায়নি।')
-      );
-    } finally {
-      setSubmitting(false);
-    }
   };
 
   const handleSoftDelete = async (entryId: string) => {
@@ -556,23 +192,29 @@ export function DiseaseDatabaseView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(
-        tenantDiseaseRemedyDoc(clinic.id, entryId),
-        buildSoftDeletePayload(uid, true)
-      );
+      const accessEmails =
+        clinic.accessEmails && clinic.accessEmails.length > 0
+          ? clinic.accessEmails
+          : [clinic.ownerEmail.trim().toLowerCase()].filter(Boolean);
+      const accessUids =
+        clinic.authorizedUids && clinic.authorizedUids.length > 0
+          ? clinic.authorizedUids
+          : [uid];
+
+      await updateDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), {
+        ...buildSoftDeletePayload(uid, true),
+        clinicAccessEmails: accessEmails,
+        clinicAccessUids: accessUids,
+      });
       setConfirmDeleteId(null);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.UPDATE,
-          `clinics/${clinic.id}/disease_remedies/${entryId}`
-        );
-      }
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/disease_remedies/${entryId}`
+      );
       setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to remove protocol.', 'রোগের প্রোটোকল মুছে ফেলা যায়নি।')
+        msg || t('Unable to remove protocol.', 'রোগের প্রোটোকল মুছে ফেলা যায়নি।')
       );
     }
   };
@@ -617,7 +259,7 @@ export function DiseaseDatabaseView({
   };
 
   const openPrescribeForEntry = (entry: DiseaseRemedyEntry) => {
-    const rules = deriveRulesFromLegacyEntry(entry);
+    const rules = deriveRulesFromDiseaseEntry(entry);
     const prefill: ConsultationPrefill = {
       diseaseName: entry.diseaseName,
       presentingSymptoms: rules.map((r) => `[${entry.diseaseName}] ${r.symptom}`).join('\n'),
@@ -792,7 +434,7 @@ export function DiseaseDatabaseView({
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {filteredEntries.map((entry) => {
             const isDeleting = confirmDeleteId === entry.id;
-            const rules = deriveRulesFromLegacyEntry(entry);
+            const rules = deriveRulesFromDiseaseEntry(entry);
 
             return (
               <article
@@ -952,439 +594,20 @@ export function DiseaseDatabaseView({
 
       {/* Add / Edit Multi-Symptom Disease Modal */}
       {showFormModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white border border-slate-200 rounded-xl w-full max-w-3xl my-8 overflow-hidden">
-            <div className="px-6 py-4 border-b border-slate-200 flex items-center justify-between">
-              <div>
-                <h2 className="font-display text-lg font-semibold text-slate-900">
-                  {editingEntry
-                    ? t('Edit Disease & Symptom Rules', 'রোগ ও লক্ষণভিত্তিক ঔষধ সম্পাদনা')
-                    : t('Add Disease with Multiple Symptoms & Remedies', 'নতুন রোগ, একাধিক লক্ষণ ও আলাদা ঔষধ যোগ করুন')}
-                </h2>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {t(
-                    'Enter disease, symptom, modalities (< / >), and remedy (potency is optional). Morning vs Afternoon timing is chosen at visit time.',
-                    'রোগ, লক্ষণ, হ্রাস-বৃদ্ধি ও ঔষধ সংরক্ষণ করুন (পাওয়ার/শক্তি ঐচ্ছিক)। সকালে না বিকালে খাবে তা ভিজিটের সময় নির্ধারণ করা হবে।'
-                  )}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setShowFormModal(false)}
-                aria-label={t('Close modal', 'বন্ধ করুন')}
-                className="p-2 text-slate-500 hover:text-slate-900 rounded-lg hover:bg-slate-100 transition-colors cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form
-              onSubmit={handleSaveEntry}
-              className="p-6 space-y-5 max-h-[82vh] overflow-y-auto"
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                    {t('Patient Scope *', 'রোগীর ধরন *')}
-                  </label>
-                  <select
-                    value={patientScope}
-                    onChange={(e) => setPatientScope(e.target.value as DiseasePatientScope)}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                  >
-                    {DISEASE_PATIENT_SCOPES.map((sc) => (
-                      <option key={sc} value={sc}>
-                        {scopeLabels[sc]}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="sm:col-span-2">
-                  <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                    {t('Disease Name *', 'রোগের নাম *')}
-                  </label>
-                  <input
-                    type="text"
-                    required
-                    maxLength={FIELD_LIMITS.diseaseNameMax}
-                    value={diseaseName}
-                    onChange={(e) => setDiseaseName(e.target.value)}
-                    placeholder={t(
-                      'e.g. Abdominal Pain (পেটব্যথা), Cough (কাশি), Mastitis in Cow',
-                      'যেমন: পেটব্যথা, কাশি, গরুর ওলান ফোলা, জ্বর'
-                    )}
-                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                  />
-                </div>
-              </div>
-
-              {/* Dynamic Symptom -> Remedy Rules Builder */}
-              <div className="space-y-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <label className="block text-xs font-semibold text-slate-800">
-                    {t(
-                      'Symptom-to-Remedy Rules (লক্ষণ অনুযায়ী ঔষধ) *',
-                      'লক্ষণভিত্তিক ঔষধের তালিকা *'
-                    )}{' '}
-                    <span className="font-mono text-slate-500">({symptomRules.length}/50)</span>
-                  </label>
-                  <button
-                    type="button"
-                    onClick={addRuleRow}
-                    disabled={symptomRules.length >= 50}
-                    className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-teal-800 bg-teal-50 border border-teal-300 rounded-lg hover:bg-teal-100 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    {t('Add Another Symptom Rule', 'আরও লক্ষণ ও ঔষধ যোগ করুন')}
-                  </button>
-                </div>
-
-                <div className="space-y-3">
-                  {symptomRules.map((rule, index) => {
-                    const ruleOptions = DISEASE_ENTRY_RULE_TYPES.includes(rule.timing)
-                      ? DISEASE_ENTRY_RULE_TYPES
-                      : [rule.timing, ...DISEASE_ENTRY_RULE_TYPES];
-
-                    const remedySuggestions =
-                      activeRemedyDropdownRuleId === rule.id
-                        ? getRemedySuggestions(rule.remedyName)
-                        : [];
-                    const potencySuggestions =
-                      activePotencyDropdownRuleId === rule.id
-                        ? getPotencySuggestions(rule.potency || '')
-                        : [];
-
-                    return (
-                      <div
-                        key={rule.id}
-                        ref={(el) => {
-                          ruleCardRefs.current[rule.id] = el;
-                        }}
-                        className="border border-slate-200 rounded-xl p-4 bg-slate-50/70 space-y-3"
-                      >
-                        <div className="flex flex-wrap items-center justify-between gap-2">
-                          <span className="text-xs font-semibold text-slate-700 font-mono">
-                            #{index + 1}
-                          </span>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <button
-                              type="button"
-                              disabled={symptomRules.length >= 50}
-                              onClick={() => addAnotherRemedyForSameSymptom(rule)}
-                              title={t(
-                                'Add another remedy for this same symptom',
-                                'এই একই লক্ষণে আরেকটি ঔষধ যোগ করুন'
-                              )}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-teal-800 bg-white border border-teal-200 rounded-md hover:bg-teal-50 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
-                            >
-                              <CopyPlus className="w-3 h-3" />
-                              {t('+ Remedy (Same Symptom)', '+ একই লক্ষণে আরেকটি ঔষধ')}
-                            </button>
-                            <select
-                              value={rule.timing}
-                              onChange={(e) =>
-                                updateRule(rule.id, { timing: e.target.value as RemedyRuleTiming })
-                              }
-                              className="px-2.5 py-1 text-xs border border-slate-300 rounded-md bg-white text-slate-800"
-                            >
-                              {ruleOptions.map((tm) => (
-                                <option key={tm} value={tm}>
-                                  {tm === 'general'
-                                    ? t('Homeopathic (General)', 'হোমিওপ্যাথিক ঔষধ')
-                                    : tm === 'biochemic'
-                                      ? t('Biochemic', 'বায়োকেমিক ঔষধ')
-                                      : timingLabels[tm]}
-                                </option>
-                              ))}
-                            </select>
-                            {symptomRules.length > 1 && (
-                              <button
-                                type="button"
-                                onClick={() => removeRuleRow(rule.id)}
-                                aria-label={t('Remove symptom row', 'সারি মুছুন')}
-                                className="p-1 text-slate-400 hover:text-red-700 rounded hover:bg-white cursor-pointer"
-                              >
-                                <Trash2 className="w-3.5 h-3.5" />
-                              </button>
-                            )}
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                            {t('Specific Symptom / Pain Type *', 'নির্দিষ্ট লক্ষণ ও ব্যথার ধরন *')}
-                          </label>
-                          <input
-                            type="text"
-                            required
-                            maxLength={FIELD_LIMITS.ruleSymptomMax}
-                            value={rule.symptom}
-                            onChange={(e) => updateRule(rule.id, { symptom: e.target.value })}
-                            placeholder={t(
-                              'e.g. Cramping pain better bending double or firm pressure (সামনের দিকে ঝুঁকলে বা চাপ দিলে ব্যথা কমা)',
-                              'যেমন: সামনের দিকে ঝুঁকলে বা চাপ দিলে পেটের কামড়ানো ব্যথা কমে / কাশতে কাশতে কুঁজো হয়ে যাওয়া'
-                            )}
-                            className="w-full px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                          />
-                        </div>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-12 gap-3">
-                          <div className="sm:col-span-5 relative">
-                            <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                              {t('Remedy Name *', 'ঔষধের নাম *')}
-                            </label>
-                            <input
-                              type="text"
-                              required
-                              autoComplete="off"
-                              maxLength={FIELD_LIMITS.remedyNameMax}
-                              value={rule.remedyName}
-                              onFocus={() => setActiveRemedyDropdownRuleId(rule.id)}
-                              onBlur={() => {
-                                window.setTimeout(() => {
-                                  setActiveRemedyDropdownRuleId((cur) =>
-                                    cur === rule.id ? null : cur
-                                  );
-                                }, 120);
-                              }}
-                              onChange={(e) => {
-                                updateRule(rule.id, { remedyName: e.target.value });
-                                setActiveRemedyDropdownRuleId(rule.id);
-                              }}
-                              placeholder={t(
-                                'Type 1st letter (e.g. C, A, B)...',
-                                'প্রথম অক্ষর লিখুন (যেমন: C, A, B)...'
-                              )}
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                            />
-                            {activeRemedyDropdownRuleId === rule.id &&
-                              remedySuggestions.length > 0 && (
-                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-30 max-h-56 overflow-y-auto divide-y divide-slate-100">
-                                  <div className="px-2.5 py-1 bg-slate-50 text-[10px] font-medium text-slate-500 flex items-center justify-between">
-                                    <span>
-                                      {t('Suggested Remedies & Potency', 'সম্ভাব্য ঔষধ ও পাওয়ার')}
-                                    </span>
-                                    <span>{remedySuggestions.length}</span>
-                                  </div>
-                                  {remedySuggestions.map((item) => (
-                                    <div
-                                      key={item.name}
-                                      className="px-2.5 py-1.5 hover:bg-teal-50/70 flex items-center justify-between gap-2 text-xs"
-                                    >
-                                      <button
-                                        type="button"
-                                        onMouseDown={(e) => {
-                                          e.preventDefault();
-                                          updateRule(rule.id, {
-                                            remedyName: item.name,
-                                          });
-                                          setActiveRemedyDropdownRuleId(null);
-                                        }}
-                                        className="flex-1 text-left font-medium text-slate-900 truncate cursor-pointer"
-                                      >
-                                        {item.name}
-                                      </button>
-                                      <div className="flex items-center gap-1 shrink-0">
-                                        {item.potencies.slice(0, 3).map((pot) => (
-                                          <button
-                                            key={pot}
-                                            type="button"
-                                            onMouseDown={(e) => {
-                                              e.preventDefault();
-                                              updateRule(rule.id, {
-                                                remedyName: item.name,
-                                                potency: pot,
-                                              });
-                                              setActiveRemedyDropdownRuleId(null);
-                                            }}
-                                            className="px-1.5 py-0.5 text-[10px] font-mono font-semibold bg-teal-50 text-teal-800 border border-teal-200 rounded hover:bg-teal-700 hover:text-white transition-colors cursor-pointer"
-                                          >
-                                            {pot}
-                                          </button>
-                                        ))}
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
-                          </div>
-
-                          <div className="sm:col-span-3 relative">
-                            <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                              {t('Potency (Optional)', 'পাওয়ার / শক্তি (ঐচ্ছিক)')}
-                            </label>
-                            <input
-                              type="text"
-                              autoComplete="off"
-                              maxLength={FIELD_LIMITS.potencyMax}
-                              value={rule.potency || ''}
-                              onFocus={() => setActivePotencyDropdownRuleId(rule.id)}
-                              onBlur={() => {
-                                window.setTimeout(() => {
-                                  setActivePotencyDropdownRuleId((cur) =>
-                                    cur === rule.id ? null : cur
-                                  );
-                                }, 120);
-                              }}
-                              onChange={(e) => {
-                                updateRule(rule.id, { potency: e.target.value });
-                                setActivePotencyDropdownRuleId(rule.id);
-                              }}
-                              placeholder={t('Optional (30C / 200C)', 'ঐচ্ছিক (30C / 200C)')}
-                              className="w-full px-3 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                            />
-                            {activePotencyDropdownRuleId === rule.id &&
-                              potencySuggestions.length > 0 && (
-                                <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-slate-200 rounded-lg shadow-lg z-30 max-h-48 overflow-y-auto p-1.5 grid grid-cols-2 gap-1">
-                                  {potencySuggestions.map((pot) => (
-                                    <button
-                                      key={pot}
-                                      type="button"
-                                      onMouseDown={(e) => {
-                                        e.preventDefault();
-                                        updateRule(rule.id, { potency: pot });
-                                        setActivePotencyDropdownRuleId(null);
-                                      }}
-                                      className={`px-2 py-1 text-left text-[11px] font-mono rounded hover:bg-teal-50 hover:text-teal-900 cursor-pointer truncate ${
-                                        rule.potency === pot
-                                          ? 'bg-teal-50 font-semibold text-teal-800'
-                                          : 'text-slate-700'
-                                      }`}
-                                    >
-                                      {pot}
-                                    </button>
-                                  ))}
-                                </div>
-                              )}
-                          </div>
-
-                          <div className="sm:col-span-4">
-                            <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                              {t('Ounce / Globules / Phial', 'পরিমাণ (আউন্স / বড়ি / ফাইল)')}
-                            </label>
-                            <input
-                              type="text"
-                              list="disease-unit-list"
-                              maxLength={FIELD_LIMITS.ruleUnitMax}
-                              value={rule.doseOrUnit || ''}
-                              onChange={(e) => updateRule(rule.id, { doseOrUnit: e.target.value })}
-                              placeholder={t('e.g. ৩০ আউন্স / ৩০ বড়ি', 'যেমন: ৩০ আউন্স / ৩০ বড়ি')}
-                              className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
-                            />
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-[11px] font-medium text-slate-700 mb-1">
-                            {t(
-                              'Modalities (< Worse / > Better) & Mental State (Optional)',
-                              'হ্রাস-বৃদ্ধি ও মানসিক অবস্থা (ঐচ্ছিক)'
-                            )}
-                          </label>
-                          <input
-                            type="text"
-                            maxLength={FIELD_LIMITS.ruleNotesMax}
-                            value={rule.notes || ''}
-                            onChange={(e) => updateRule(rule.id, { notes: e.target.value })}
-                            placeholder={t(
-                              'e.g. > Warmth & hard pressure; < Anger; or > Bending backward',
-                              'যেমন: গরম সেঁকে আরাম, রাগে বাড়ে / পেছনের দিকে বাঁকা হলে আরাম / খাবার পর ভারী'
-                            )}
-                            className="w-full px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-teal-700"
-                          />
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-
-                {/* Bottom Quick Add Button so users don't have to scroll up */}
-                <div className="pt-1 flex justify-end">
-                  <button
-                    type="button"
-                    onClick={addRuleRow}
-                    disabled={symptomRules.length >= 50}
-                    className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2 text-xs font-medium text-teal-800 bg-teal-50 border border-dashed border-teal-400 rounded-lg hover:bg-teal-100 disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    {t('Add New Symptom & Remedy', 'নতুন লক্ষণ ও ঔষধ যোগ করুন')} ({symptomRules.length}/50)
-                  </button>
-                </div>
-              </div>
-
-              <datalist id="disease-unit-list">
-                <option value="৩০ আউন্স" />
-                <option value="১৫ আউন্স" />
-                <option value="৩০ বড়ি" />
-                <option value="৪০ বড়ি" />
-                <option value="১ ফাইল" />
-                <option value="২ ফাইল" />
-              </datalist>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('General Dosage & Administration', 'সাধারণ সেবন বিধি ও মাত্রা')}
-                </label>
-                <input
-                  type="text"
-                  maxLength={FIELD_LIMITS.dosageMax}
-                  value={dosageInstructions}
-                  onChange={(e) => setDosageInstructions(e.target.value)}
-                  placeholder={t(
-                    'e.g. 5 drops in water morning & afternoon for 5 days',
-                    'যেমন: সকালে ও বিকালে ৫ ফোঁটা করে পানির সাথে ৫ দিন'
-                  )}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1.5">
-                  {t('Clinical Reference Notes', 'ক্লিনিক্যাল নোট')}
-                </label>
-                <textarea
-                  rows={2}
-                  maxLength={FIELD_LIMITS.symptomNotesMax}
-                  value={clinicalNotes}
-                  onChange={(e) => setClinicalNotes(e.target.value)}
-                  placeholder={t(
-                    'Dietary advice, follow-up interval, or differential remedies...',
-                    'পথ্য নির্দেশনা, ফলো-আপ পরামর্শ বা বিকল্প ঔষধ নোট...'
-                  )}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
-                />
-              </div>
-
-              {formError && (
-                <p className="text-xs text-red-700 font-medium" role="alert">
-                  {formError}
-                </p>
-              )}
-
-              <div className="pt-4 border-t border-slate-200 flex items-center justify-end gap-3">
-                <button
-                  type="button"
-                  onClick={() => setShowFormModal(false)}
-                  className="px-4 py-2 text-sm font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
-                >
-                  {t('Cancel', 'বাতিল')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className={`px-5 py-2 text-sm font-medium rounded-lg disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
-                >
-                  {submitting
-                    ? t('Saving...', 'সংরক্ষণ হচ্ছে...')
-                    : editingEntry
-                      ? t('Save Changes', 'পরিবর্তন সংরক্ষণ')
-                      : t('Save Disease Protocol', 'রোগ ও ঔষধ সংরক্ষণ')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
+        <DiseaseProtocolModal
+          clinic={clinic}
+          entries={entries}
+          existingEntry={editingEntry}
+          defaultScope={scopeFilter === 'all' ? 'All' : scopeFilter}
+          onClose={() => {
+            setShowFormModal(false);
+            setEditingEntry(null);
+          }}
+          onSaved={() => {
+            setShowFormModal(false);
+            setEditingEntry(null);
+          }}
+        />
       )}
 
       {/* Step 1 of Prescribe Flow: Patient Selector Modal */}

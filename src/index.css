@@ -42,7 +42,28 @@
     print-color-adjust: exact;
   }
 
-  .print-report-sheet {
+  .print-friendly {
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+
+  .print-friendly .print-friendly-chrome,
+  .print-friendly nav,
+  .print-friendly button,
+  .print-friendly select,
+  .print-friendly input,
+  .print-friendly textarea,
+  .print-friendly [role="menu"],
+  .print-friendly [role="tablist"],
+  .print-friendly [role="group"] {
+    display: none !important;
+  }
+
+  .print-friendly .print-report-sheet {
     width: 100% !important;
     max-width: none !important;
     margin: 0 !important;
@@ -51,23 +72,36 @@
     border-radius: 0 !important;
     box-shadow: none !important;
     background: #ffffff !important;
+    color: #0f172a !important;
+    line-height: 1.5;
   }
 
+  .print-friendly .print-report-sheet table,
   .print-report-sheet table {
     width: 100% !important;
     border-collapse: collapse !important;
   }
 
+  .print-friendly .print-report-sheet th,
+  .print-friendly .print-report-sheet td {
+    border-color: #cbd5e1 !important;
+  }
+
+  .print-friendly .print-report-sheet thead,
   .print-report-sheet thead {
     display: table-header-group;
   }
 
+  .print-friendly .print-report-sheet tr,
   .print-report-sheet tr,
   .print-avoid-break {
     break-inside: avoid;
     page-break-inside: avoid;
   }
 
+  .print-friendly .print-report-sheet h1,
+  .print-friendly .print-report-sheet h2,
+  .print-friendly .print-report-sheet h3,
   .print-report-sheet h1,
   .print-report-sheet h2,
   .print-report-sheet h3 {

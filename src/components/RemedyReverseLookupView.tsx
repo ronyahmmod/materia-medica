@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { onSnapshot, query, where } from 'firebase/firestore';
-import { Pill, Search, Send, UserCheck, X } from 'lucide-react';
+import { Edit3, Pill, Plus, Search, Send, UserCheck, X } from 'lucide-react';
 import { auth, handleFirestoreError, OperationType } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
@@ -24,6 +24,7 @@ import {
   ConsultationFormModal,
   type ConsultationPrefill,
 } from './ConsultationFormModal';
+import { DiseaseProtocolModal } from './DiseaseProtocolModal';
 import { SecureClinicalImage } from './SecureClinicalImage';
 
 interface RemedyReverseLookupViewProps {
@@ -82,6 +83,11 @@ export function RemedyReverseLookupView({
   );
   const [patientPickerQuery, setPatientPickerQuery] = useState('');
   const [targetPatient, setTargetPatient] = useState<Patient | null>(null);
+
+  // Add / Edit Disease & Medicine Modal State
+  const [showProtocolModal, setShowProtocolModal] = useState(false);
+  const [editingEntry, setEditingEntry] = useState<DiseaseRemedyEntry | null>(null);
+  const [editingRuleId, setEditingRuleId] = useState<string | null>(null);
 
   useEffect(() => {
     setLoading(true);
@@ -335,6 +341,19 @@ export function RemedyReverseLookupView({
             )}
           </p>
         </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            setEditingEntry(null);
+            setEditingRuleId(null);
+            setShowProtocolModal(true);
+          }}
+          className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 self-start sm:self-auto ${palette.primaryBtn}`}
+        >
+          <Plus className="w-3.5 h-3.5" />
+          {t('Add Medicine & Indication', 'নতুন ঔষধ ও লক্ষণ যোগ করুন')}
+        </button>
       </div>
 
       {/* Search, Potency & Scope Filters */}
@@ -544,26 +563,47 @@ export function RemedyReverseLookupView({
                       )}
                     </div>
 
-                    <button
-                      type="button"
-                      disabled={patients.filter((p) => !p.isDeleted).length === 0}
-                      onClick={() => {
-                        setPatientPickerQuery('');
-                        setTargetPatient(null);
-                        setPrescribeSlot(
-                          ind.timing === 'biochemic'
-                            ? 'biochemic'
-                            : ind.timing === 'afternoon'
-                              ? 'afternoon'
-                              : 'morning'
-                        );
-                        setPrescribeTarget(ind);
-                      }}
-                      className={`self-start sm:self-center shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
-                    >
-                      <Send className="w-3 h-3" />
-                      {t('Prescribe to Patient', 'রোগীকে দিন')}
-                    </button>
+                    <div className="flex items-center gap-2 self-start sm:self-center shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const found = entries.find((e) => e.id === ind.diseaseId) || null;
+                          if (!found) return;
+                          const matchedRuleId = ind.id.startsWith(`${ind.diseaseId}-`)
+                            ? ind.id.slice(ind.diseaseId.length + 1)
+                            : null;
+                          setEditingEntry(found);
+                          setEditingRuleId(matchedRuleId);
+                          setShowProtocolModal(true);
+                        }}
+                        aria-label={t('Edit medicine or symptom', 'ঔষধ বা লক্ষণ সম্পাদনা')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <Edit3 className="w-3 h-3" />
+                        {t('Edit', 'সম্পাদনা')}
+                      </button>
+
+                      <button
+                        type="button"
+                        disabled={patients.filter((p) => !p.isDeleted).length === 0}
+                        onClick={() => {
+                          setPatientPickerQuery('');
+                          setTargetPatient(null);
+                          setPrescribeSlot(
+                            ind.timing === 'biochemic'
+                              ? 'biochemic'
+                              : ind.timing === 'afternoon'
+                                ? 'afternoon'
+                                : 'morning'
+                          );
+                          setPrescribeTarget(ind);
+                        }}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg disabled:opacity-50 transition-colors cursor-pointer whitespace-nowrap ${palette.primaryBtn}`}
+                      >
+                        <Send className="w-3 h-3" />
+                        {t('Prescribe to Patient', 'রোগীকে দিন')}
+                      </button>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -719,6 +759,26 @@ export function RemedyReverseLookupView({
             setTargetPatient(null);
             setPrescribeTarget(null);
             onConsultationSaved(patientId);
+          }}
+        />
+      )}
+      {/* Add / Edit Disease & Medicine Modal */}
+      {showProtocolModal && (
+        <DiseaseProtocolModal
+          clinic={clinic}
+          entries={entries}
+          existingEntry={editingEntry}
+          defaultScope={scopeFilter === 'all' ? 'All' : scopeFilter}
+          focusRuleId={editingRuleId}
+          onClose={() => {
+            setShowProtocolModal(false);
+            setEditingEntry(null);
+            setEditingRuleId(null);
+          }}
+          onSaved={() => {
+            setShowProtocolModal(false);
+            setEditingEntry(null);
+            setEditingRuleId(null);
           }}
         />
       )}

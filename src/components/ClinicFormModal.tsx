@@ -16,7 +16,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   ACCENT_THEME_LABELS_I18N,
@@ -471,6 +471,8 @@ export function ClinicFormModal({
       if (cleanAddress) tenantPayload.address = cleanAddress;
       if (cleanHosting) tenantPayload.hostingProvider = cleanHosting;
       if (cleanNotes) tenantPayload.subscriptionNotes = cleanNotes;
+      if (existingClinic?.lastActiveAt) tenantPayload.lastActiveAt = existingClinic.lastActiveAt;
+      if (existingClinic?.lastActiveEmail) tenantPayload.lastActiveEmail = existingClinic.lastActiveEmail;
 
       const publicPayload = buildPublicProfilePayload(clinicId, {
         slug: cleanSlug,
@@ -513,9 +515,7 @@ export function ClinicFormModal({
       } else {
         setErrorMessage(rawMsg);
       }
-      if (rawMsg.toLowerCase().includes('permission')) {
-        handleFirestoreError(err, OperationType.WRITE, `clinics/${clinicId}`);
-      }
+      reportFirestoreError(err, OperationType.WRITE, `clinics/${clinicId}`);
     } finally {
       setSaving(false);
     }

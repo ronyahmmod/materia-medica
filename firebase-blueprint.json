@@ -85,6 +85,17 @@
           "type": "string",
           "maxLength": 500
         },
+        "lastActiveAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last active client session heartbeat"
+        },
+        "lastActiveEmail": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 160,
+          "description": "Lowercase email of the last active clinic user"
+        },
         "createdBy": {
           "type": "string",
           "minLength": 1,

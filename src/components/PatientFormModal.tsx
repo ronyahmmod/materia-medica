@@ -1,7 +1,7 @@
 import { useState, type ChangeEvent, type FormEvent } from 'react';
 import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { Upload, X, AlertCircle } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, OperationType, reportFirestoreError } from '../firebase';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
 import {
@@ -259,13 +259,13 @@ export function PatientFormModal({
 
       onSaved(patientId);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, isEditing ? OperationType.UPDATE : OperationType.CREATE, path);
-      }
+      const msg = reportFirestoreError(
+        error,
+        isEditing ? OperationType.UPDATE : OperationType.CREATE,
+        path
+      );
       setErrorMsg(
-        error instanceof Error
-          ? error.message
-          : t('Unable to save patient record.', 'রোগীর রেকর্ড সংরক্ষণ করা যায়নি।')
+        msg || t('Unable to save patient record.', 'রোগীর রেকর্ড সংরক্ষণ করা যায়নি।')
       );
     } finally {
       setSubmitting(false);

@@ -127,6 +127,7 @@ service cloud.firestore {
           'tagline', 'phone', 'address', 'currencySymbol', 'accentColor',
           'planTier', 'subscriptionStatus', 'patientLimit', 'storageLimitMb',
           'hostingProvider', 'monthlyFeeAmount', 'billingCycle', 'subscriptionNotes',
+          'lastActiveAt', 'lastActiveEmail',
           'createdBy', 'createdAt', 'updatedAt'
         ])
         && isValidSlug(data.slug)
@@ -148,6 +149,8 @@ service cloud.firestore {
         && data.monthlyFeeAmount is number && data.monthlyFeeAmount >= 0 && data.monthlyFeeAmount <= 100000
         && data.billingCycle is string && data.billingCycle in ['free', 'monthly', 'yearly']
         && isOptionalString(data, 'subscriptionNotes', 500)
+        && (!('lastActiveAt' in data) || data.lastActiveAt is timestamp)
+        && isOptionalString(data, 'lastActiveEmail', 160)
         && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -587,19 +590,36 @@ service cloud.firestore {
         && incoming().updatedAt == request.time;
 
       allow update: if isValidId(clinicId)
-        && isPrimaryAdmin()
         && isValidClinicTenant(incoming())
         && incoming().createdBy == existing().createdBy
         && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly([
-          'slug', 'clinicName', 'practitionerName', 'ownerEmail',
-          'accessEmails', 'authorizedUids',
-          'tagline', 'phone', 'address', 'currencySymbol', 'accentColor',
-          'planTier', 'subscriptionStatus', 'patientLimit', 'storageLimitMb',
-          'hostingProvider', 'monthlyFeeAmount', 'billingCycle', 'subscriptionNotes',
-          'updatedAt'
-        ]);
+        && (
+          (
+            isPrimaryAdmin()
+            && incoming().updatedAt == request.time
+            && (!('lastActiveAt' in existing()) ? !('lastActiveAt' in incoming()) : ('lastActiveAt' in incoming() && incoming().lastActiveAt == existing().lastActiveAt))
+            && (!('lastActiveEmail' in existing()) ? !('lastActiveEmail' in incoming()) : ('lastActiveEmail' in incoming() && incoming().lastActiveEmail == existing().lastActiveEmail))
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'slug', 'clinicName', 'practitionerName', 'ownerEmail',
+              'accessEmails', 'authorizedUids',
+              'tagline', 'phone', 'address', 'currencySymbol', 'accentColor',
+              'planTier', 'subscriptionStatus', 'patientLimit', 'storageLimitMb',
+              'hostingProvider', 'monthlyFeeAmount', 'billingCycle', 'subscriptionNotes',
+              'updatedAt'
+            ])
+          )
+          || (
+            isClinicMember(clinicId)
+            && incoming().updatedAt == existing().updatedAt
+            && 'lastActiveAt' in incoming()
+            && incoming().lastActiveAt == request.time
+            && 'lastActiveEmail' in incoming()
+            && incoming().lastActiveEmail == userEmailLower()
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'lastActiveAt', 'lastActiveEmail'
+            ])
+          )
+        );
 
       allow delete: if isValidId(clinicId) && isPrimaryAdmin();
 
@@ -641,6 +661,7 @@ service cloud.firestore {
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
+                'clinicAccessEmails', 'clinicAccessUids',
                 'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
                 'caseNumber', 'fullName', 'age', 'gender', 'phone',
                 'email', 'address', 'chiefComplaint', 'thermalState',
@@ -695,6 +716,7 @@ service cloud.firestore {
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'clinicAccessEmails', 'clinicAccessUids',
                   'visitDate', 'diseaseName', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
                   'modalitiesWorse', 'modalitiesBetter',
                   'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
@@ -750,6 +772,7 @@ service cloud.firestore {
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'clinicAccessEmails', 'clinicAccessUids',
                   'caption', 'category', 'consultationId',
                   'isDeleted', 'deletedAt', 'deletedBy'
                 ])
@@ -802,6 +825,7 @@ service cloud.firestore {
                 && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
+                  'clinicAccessEmails', 'clinicAccessUids',
                   'observedDate', 'focusArea', 'content',
                   'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
                 ])
@@ -854,6 +878,7 @@ service cloud.firestore {
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
+                'clinicAccessEmails', 'clinicAccessUids',
                 'patientName', 'caseNumber', 'collectedDate', 'feeType',
                 'feeAmount', 'discountAmount', 'netAmount', 'cashPaid', 'dueAmount',
                 'notes', 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
@@ -902,6 +927,7 @@ service cloud.firestore {
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
+                'clinicAccessEmails', 'clinicAccessUids',
                 'chapter', 'rubric', 'primaryRemedy', 'remedies',
                 'modalities', 'symptomNotes',
                 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
@@ -950,6 +976,7 @@ service cloud.firestore {
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
+                'clinicAccessEmails', 'clinicAccessUids',
                 'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
                 'firstRemedyMorning', 'firstRemedyPotency',
                 'secondRemedyAfternoon', 'secondRemedyPotency',

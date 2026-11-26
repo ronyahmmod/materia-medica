@@ -8,6 +8,7 @@ import {
   where,
 } from 'firebase/firestore';
 import {
+  AlertCircle,
   ArrowLeft,
   Banknote,
   Calendar,
@@ -16,6 +17,7 @@ import {
   CheckCircle2,
   ChevronUp,
   Compass,
+  Download,
   Edit3,
   FilePlus2,
   FileText,
@@ -28,10 +30,20 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import {
+  auth,
+  handleFirestoreError,
+  OperationType,
+  reportFirestoreError,
+} from '../firebase';
 import { formatCashAmount, roundAmount, summarizeFees } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
+import {
+  downloadPrintableHtmlReport,
+  findPrintableReportSheet,
+  triggerReliablePrint,
+} from '../lib/printHelper';
 import {
   fetchNoteRepertorySuggestions,
   type NoteRepertorySuggestion,
@@ -127,6 +139,8 @@ export function PatientDetailView({
   const [savingSettle, setSavingSettle] = useState(false);
   const [confirmDeleteFeeId, setConfirmDeleteFeeId] = useState<string | null>(null);
   const [showPrintView, setShowPrintView] = useState(false);
+  const [printingNow, setPrintingNow] = useState(false);
+  const [printBlockedNotice, setPrintBlockedNotice] = useState(false);
   const [printOptions, setPrintOptions] = useState<PrintReportOptions>(
     DEFAULT_PRINT_REPORT_OPTIONS
   );
@@ -173,6 +187,7 @@ export function PatientDetailView({
   const [savingFollowUp, setSavingFollowUp] = useState(false);
   const quickActionRef = useRef<HTMLDivElement>(null);
   const feesSectionRef = useRef<HTMLElement>(null);
+  const printContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     setLoadingSubdata(true);
@@ -360,7 +375,12 @@ export function PatientDetailView({
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/patients/${patient.id}`);
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/patients/${patient.id}`
+      );
+      setActionError(msg);
     }
   };
 
@@ -440,18 +460,12 @@ export function PatientDetailView({
       setConfirmDeletePhotoId(null);
       onPhotoStorageChanged();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.UPDATE,
-          `clinics/${clinic.id}/patients/${patient.id}/photos/${photo.id}`
-        );
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Failed to delete photo.', 'ছবি মুছে ফেলা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/patients/${patient.id}/photos/${photo.id}`
       );
+      setActionError(msg || t('Failed to delete photo.', 'ছবি মুছে ফেলা যায়নি।'));
     }
   };
 
@@ -466,11 +480,12 @@ export function PatientDetailView({
       );
       setConfirmDeleteConsultationId(null);
     } catch (error) {
-      handleFirestoreError(
+      const msg = reportFirestoreError(
         error,
         OperationType.UPDATE,
         `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`
       );
+      setActionError(msg || t('Failed to delete consultation.', 'ভিজিট মুছে ফেলা যায়নি।'));
     }
   };
 
@@ -511,14 +526,8 @@ export function PatientDetailView({
       setSuggestionError(null);
       lastQueriedNoteRef.current = '';
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.CREATE, path);
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to save clinical note.', 'ক্লিনিক্যাল নোট সংরক্ষণ করা যায়নি।')
-      );
+      const msg = reportFirestoreError(error, OperationType.CREATE, path);
+      setActionError(msg || t('Unable to save clinical note.', 'ক্লিনিক্যাল নোট সংরক্ষণ করা যায়নি।'));
     } finally {
       setSavingNote(false);
     }
@@ -551,14 +560,8 @@ export function PatientDetailView({
       });
       setEditingNoteId(null);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, path);
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to update clinical note.', 'ক্লিনিক্যাল নোট আপডেট করা যায়নি।')
-      );
+      const msg = reportFirestoreError(error, OperationType.UPDATE, path);
+      setActionError(msg || t('Unable to update clinical note.', 'ক্লিনিক্যাল নোট আপডেট করা যায়নি।'));
     }
   };
 
@@ -573,11 +576,12 @@ export function PatientDetailView({
       );
       setConfirmDeleteNoteId(null);
     } catch (error) {
-      handleFirestoreError(
+      const msg = reportFirestoreError(
         error,
         OperationType.UPDATE,
         `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`
       );
+      setActionError(msg || t('Unable to delete clinical note.', 'ক্লিনিক্যাল নোট মুছে ফেলা যায়নি।'));
     }
   };
 
@@ -619,9 +623,7 @@ export function PatientDetailView({
         updatedAt: serverTimestamp(),
       });
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.CREATE, path);
-      }
+      reportFirestoreError(error, OperationType.CREATE, path);
       throw error;
     }
   };
@@ -665,14 +667,12 @@ export function PatientDetailView({
       setSettlingFeeId(null);
       setSettleAmountInput('');
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${rec.id}`);
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to record cash settlement.', 'বকেয়া নগদ আদায় সংরক্ষণ করা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/fee_records/${rec.id}`
       );
+      setActionError(msg || t('Unable to record cash settlement.', 'বকেয়া নগদ আদায় সংরক্ষণ করা যায়নি।'));
     } finally {
       setSavingSettle(false);
     }
@@ -686,14 +686,12 @@ export function PatientDetailView({
       await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteFeeId(null);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${feeId}`);
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to delete cash fee entry.', 'নগদ ফি রেকর্ড মুছে ফেলা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/fee_records/${feeId}`
       );
+      setActionError(msg || t('Unable to delete cash fee entry.', 'নগদ ফি রেকর্ড মুছে ফেলা যায়নি।'));
     }
   };
 
@@ -725,14 +723,12 @@ export function PatientDetailView({
       onPhotoStorageChanged();
       onDeletedPatient();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/patients/${patient.id}`);
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to delete patient record.', 'রোগীর রেকর্ড মুছে ফেলা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/patients/${patient.id}`
       );
+      setActionError(msg || t('Unable to delete patient record.', 'রোগীর রেকর্ড মুছে ফেলা যায়নি।'));
       setDeletingPatient(false);
     }
   };
@@ -772,9 +768,61 @@ export function PatientDetailView({
     setShowFollowUpModal(true);
   };
 
-  const handleQuickPrintCase = () => {
+  const handlePrintReport = () => {
+    if (printingNow) return;
     setQuickActionOpen(false);
-    window.print();
+    setPrintBlockedNotice(false);
+
+    const containerEl = printContainerRef.current;
+    if (containerEl && !containerEl.classList.contains('print-friendly')) {
+      containerEl.classList.add('print-friendly');
+    }
+
+    let nativePrintTriggered = false;
+    const onBeforePrint = () => {
+      nativePrintTriggered = true;
+    };
+    window.addEventListener('beforeprint', onBeforePrint);
+
+    setPrintingNow(true);
+    try {
+      window.focus();
+      window.print();
+    } catch {
+      // Blocked by sandboxed iframe / WebView; handled by fallback below
+    }
+
+    window.setTimeout(async () => {
+      window.removeEventListener('beforeprint', onBeforePrint);
+      if (nativePrintTriggered) {
+        setPrintingNow(false);
+        return;
+      }
+
+      try {
+        const result = await triggerReliablePrint({
+          sheetElement: findPrintableReportSheet(),
+          documentTitle: `${patient.caseNumber} - ${patient.fullName}`,
+          skipPrimaryWindowPrint: true,
+        });
+        if (result === 'blocked') {
+          setPrintBlockedNotice(true);
+          if (!showPrintView) {
+            setActiveTab('summary');
+          }
+        }
+      } finally {
+        setPrintingNow(false);
+      }
+    }, 300);
+  };
+
+  const handleDownloadCaseReport = () => {
+    downloadPrintableHtmlReport(
+      findPrintableReportSheet(),
+      `${patient.caseNumber}-${patient.fullName}`,
+      `${patient.caseNumber} - ${patient.fullName}`
+    );
   };
 
   const handleSaveFollowUpSchedule = async (e: FormEvent) => {
@@ -800,18 +848,12 @@ export function PatientDetailView({
       await updateDoc(tenantPatientDoc(clinic.id, patient.id), updates);
       setShowFollowUpModal(false);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.UPDATE,
-          `clinics/${clinic.id}/patients/${patient.id}`
-        );
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to schedule follow-up.', 'ফলো-আপ সময় নির্ধারণ করা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/patients/${patient.id}`
       );
+      setActionError(msg || t('Unable to schedule follow-up.', 'ফলো-আপ সময় নির্ধারণ করা যায়নি।'));
     } finally {
       setSavingFollowUp(false);
     }
@@ -828,18 +870,12 @@ export function PatientDetailView({
       setFollowUpDateInput('');
       setShowFollowUpModal(false);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.UPDATE,
-          `clinics/${clinic.id}/patients/${patient.id}`
-        );
-      }
-      setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to clear follow-up date.', 'ফলো-আপ তারিখ মুছে ফেলা যায়নি।')
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/patients/${patient.id}`
       );
+      setActionError(msg || t('Unable to clear follow-up date.', 'ফলো-আপ তারিখ মুছে ফেলা যায়নি।'));
     } finally {
       setSavingFollowUp(false);
     }
@@ -860,8 +896,8 @@ export function PatientDetailView({
     showFollowUpModal;
 
   return (
-    <>
-      <div className="space-y-6 print:hidden">
+    <div ref={printContainerRef} className="print-friendly">
+      <div className="space-y-6 print:hidden print-friendly-chrome">
         <div className="flex flex-wrap items-center justify-between gap-4">
           <button
             type="button"
@@ -887,11 +923,16 @@ export function PatientDetailView({
             </button>
             <button
               type="button"
-              onClick={() => window.print()}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
+              onClick={handlePrintReport}
+              disabled={printingNow}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
             >
-              <Printer className="w-3.5 h-3.5" />
-              {t('Print Directly', 'সরাসরি প্রিন্ট')}
+              {printingNow ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Printer className="w-3.5 h-3.5" />
+              )}
+              {t('Print Report', 'রিপোর্ট প্রিন্ট')}
             </button>
             <button
               type="button"
@@ -911,6 +952,38 @@ export function PatientDetailView({
             </button>
           </div>
         </div>
+
+        {printBlockedNotice && (
+          <div className="p-3.5 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+            <div className="flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+              <p>
+                {t(
+                  'Your browser or preview frame blocked the automatic print dialog. Press Ctrl+P (or Cmd+P) now, or download the standalone printable report below to print or save as PDF.',
+                  'এই ব্রাউজার বা প্রিভিউ ফ্রেম স্বয়ংক্রিয় প্রিন্ট উইন্ডো আটকে দিয়েছে। কীবোর্ডে Ctrl+P চাপুন অথবা নিচ থেকে প্রিন্টযোগ্য রিপোর্ট ফাইল ডাউনলোড করে প্রিন্ট/PDF করুন।'
+                )}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={handleDownloadCaseReport}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {t('Download Printable Report', 'প্রিন্টযোগ্য রিপোর্ট ডাউনলোড')}
+              </button>
+              <button
+                type="button"
+                onClick={() => setPrintBlockedNotice(false)}
+                aria-label={t('Dismiss notice', 'বিজ্ঞপ্তি বন্ধ করুন')}
+                className="p-1 text-amber-800 hover:bg-amber-100 rounded cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
 
       {/* Patient Case Summary Header */}
       <section className="bg-white border border-slate-200 rounded-xl p-6">
@@ -2506,7 +2579,7 @@ export function PatientDetailView({
               <button
                 type="button"
                 role="menuitem"
-                onClick={handleQuickPrintCase}
+                onClick={handlePrintReport}
                 className="w-full flex items-start gap-3 px-2.5 py-2.5 text-left rounded-lg hover:bg-slate-50 transition-colors cursor-pointer"
               >
                 <Printer className={`w-4 h-4 mt-0.5 shrink-0 ${palette.navIconActive}`} />
@@ -2563,6 +2636,6 @@ export function PatientDetailView({
           onClose={() => setShowPrintView(false)}
         />
       )}
-    </>
+    </div>
   );
 }

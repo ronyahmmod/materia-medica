@@ -1,5 +1,15 @@
-import { useEffect, useMemo, useState } from 'react';
-import { ArrowUpDown, Banknote, Camera, Maximize2, Printer, X } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  ArrowUpDown,
+  Banknote,
+  Camera,
+  Download,
+  Loader2,
+  Maximize2,
+  Printer,
+  X,
+} from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   FEE_CATEGORY_LABELS_I18N,
@@ -11,6 +21,10 @@ import {
   THERMAL_LABELS_I18N,
 } from '../i18n/translations';
 import { formatCashAmount, summarizeFees } from '../lib/feeCalculations';
+import {
+  downloadPrintableHtmlReport,
+  triggerReliablePrint,
+} from '../lib/printHelper';
 import type {
   ClinicalNote,
   Consultation,
@@ -74,9 +88,39 @@ export function PatientCasePrintView({
   onClose,
 }: PatientCasePrintViewProps) {
   const { language, t } = useLanguage();
+  const sheetRef = useRef<HTMLElement>(null);
+  const [printingNow, setPrintingNow] = useState(false);
+  const [printBlockedNotice, setPrintBlockedNotice] = useState(false);
   const [internalOptions, setInternalOptions] = useState<PrintReportOptions>(
     DEFAULT_PRINT_REPORT_OPTIONS
   );
+
+  const reportDocTitle = `${patient.caseNumber} - ${patient.fullName}`;
+
+  const handlePrintClick = async () => {
+    if (printingNow) return;
+    setPrintingNow(true);
+    setPrintBlockedNotice(false);
+    try {
+      const result = await triggerReliablePrint({
+        sheetElement: sheetRef.current,
+        documentTitle: reportDocTitle,
+      });
+      if (result === 'blocked') {
+        setPrintBlockedNotice(true);
+      }
+    } finally {
+      setPrintingNow(false);
+    }
+  };
+
+  const handleDownloadHtmlReport = () => {
+    downloadPrintableHtmlReport(
+      sheetRef.current,
+      `${patient.caseNumber}-${patient.fullName}`,
+      reportDocTitle
+    );
+  };
 
   const activeOptions = options ?? internalOptions;
   const updateOptions = (patch: Partial<PrintReportOptions>) => {
@@ -301,16 +345,43 @@ export function PatientCasePrintView({
               )}
               <button
                 type="button"
-                onClick={() => window.print()}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap"
+                onClick={handlePrintClick}
+                disabled={printingNow}
+                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
               >
-                <Printer className="w-3.5 h-3.5" />
+                {printingNow ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Printer className="w-3.5 h-3.5" />
+                )}
                 {t('Print / Save PDF', 'প্রিন্ট / PDF সংরক্ষণ')}
               </button>
             </div>
           </div>
 
           <div className="pt-3 border-t border-slate-100">{renderControls()}</div>
+
+          {printBlockedNotice && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-950">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                <p>
+                  {t(
+                    'Your browser or preview frame blocked the automatic print popup. Press Ctrl+P (or Cmd+P) on your keyboard, or download the standalone printable report below.',
+                    'এই ব্রাউজার বা প্রিভিউ ফ্রেম স্বয়ংক্রিয় প্রিন্ট উইন্ডো আটকে দিয়েছে। কীবোর্ডে Ctrl+P চাপুন অথবা নিচ থেকে প্রিন্টযোগ্য রিপোর্ট ফাইল ডাউনলোড করে প্রিন্ট/PDF করুন।'
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleDownloadHtmlReport}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {t('Download Printable Report', 'প্রিন্টযোগ্য রিপোর্ট ডাউনলোড')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
@@ -333,10 +404,15 @@ export function PatientCasePrintView({
               <div className="flex flex-wrap items-center gap-2 shrink-0">
                 <button
                   type="button"
-                  onClick={() => window.print()}
-                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap"
+                  onClick={handlePrintClick}
+                  disabled={printingNow}
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 disabled:opacity-60 transition-colors cursor-pointer whitespace-nowrap"
                 >
-                  <Printer className="w-3.5 h-3.5" />
+                  {printingNow ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Printer className="w-3.5 h-3.5" />
+                  )}
                   {t('Print / Save PDF', 'প্রিন্ট / PDF সংরক্ষণ')}
                 </button>
 
@@ -353,13 +429,38 @@ export function PatientCasePrintView({
             </div>
 
             {renderControls()}
+
+            {printBlockedNotice && (
+              <div className="p-3 bg-amber-50 border border-amber-200 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-amber-950">
+                <div className="flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+                  <p>
+                    {t(
+                      'Your browser or preview frame blocked the automatic print popup. Press Ctrl+P (or Cmd+P), or download the standalone printable report.',
+                      'এই ব্রাউজার বা প্রিভিউ ফ্রেম স্বয়ংক্রিয় প্রিন্ট উইন্ডো আটকে দিয়েছে। Ctrl+P চাপুন অথবা প্রিন্টযোগ্য রিপোর্ট ফাইল ডাউনলোড করুন।'
+                    )}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleDownloadHtmlReport}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-amber-950 bg-white border border-amber-300 rounded-lg hover:bg-amber-100 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  {t('Download Printable Report', 'প্রিন্টযোগ্য রিপোর্ট ডাউনলোড')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
 
       {/* Printable Case Paper */}
       <div className={embedded ? 'print:p-0' : 'py-6 px-4 sm:px-8 print:p-0'}>
-        <article className="print-report-sheet max-w-4xl mx-auto bg-white border border-slate-200 rounded-xl p-6 sm:p-10 space-y-6 text-slate-900">
+        <article
+          ref={sheetRef}
+          className="print-report-sheet max-w-4xl mx-auto bg-white border border-slate-200 rounded-xl p-6 sm:p-10 space-y-6 text-slate-900"
+        >
           {/* Clinic & Document Masthead */}
           <header className="pb-4 border-b-2 border-slate-900 flex flex-col sm:flex-row print:flex-row sm:items-end print:items-end justify-between gap-4">
             <div>

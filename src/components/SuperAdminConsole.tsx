@@ -28,7 +28,7 @@ import {
   ShieldCheck,
   Trash2,
 } from 'lucide-react';
-import { auth, db, handleFirestoreError, OperationType } from '../firebase';
+import { auth, db, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   BILLING_CYCLE_LABELS_I18N,
@@ -111,6 +111,78 @@ interface SuperAdminConsoleProps {
   onEditClinic: (clinic: ClinicTenant) => void;
 }
 
+const ONLINE_WINDOW_MS = 3 * 60 * 1000;
+
+interface ClientPresenceSummary {
+  isOnline: boolean;
+  hasSeenBefore: boolean;
+  relativeLabel: string;
+  exactLabel: string | null;
+  activeEmail: string | null;
+}
+
+function formatClientPresence(
+  clinic: ClinicTenant,
+  language: 'en' | 'bn',
+  nowMs: number
+): ClientPresenceSummary {
+  const email = clinic.lastActiveEmail?.trim() || null;
+  let lastMs = 0;
+  try {
+    lastMs = clinic.lastActiveAt?.toMillis?.() ?? 0;
+  } catch {
+    lastMs = 0;
+  }
+
+  if (!lastMs) {
+    return {
+      isOnline: false,
+      hasSeenBefore: false,
+      relativeLabel: language === 'bn' ? 'এখনো লগইন করেনি' : 'Never logged in',
+      exactLabel: null,
+      activeEmail: email,
+    };
+  }
+
+  const diffMs = Math.max(0, nowMs - lastMs);
+  const isOnline = diffMs <= ONLINE_WINDOW_MS;
+  const totalMins = Math.floor(diffMs / 60_000);
+  const totalHours = Math.floor(totalMins / 60);
+  const totalDays = Math.floor(totalHours / 24);
+
+  let relativeLabel: string;
+  if (totalMins < 1) {
+    relativeLabel = language === 'bn' ? 'এইমাত্র' : 'Just now';
+  } else if (totalMins < 60) {
+    relativeLabel =
+      language === 'bn' ? `${totalMins} মিনিট আগে` : `${totalMins}m ago`;
+  } else if (totalHours < 24) {
+    relativeLabel =
+      language === 'bn' ? `${totalHours} ঘণ্টা আগে` : `${totalHours}h ago`;
+  } else {
+    relativeLabel =
+      language === 'bn' ? `${totalDays} দিন আগে` : `${totalDays}d ago`;
+  }
+
+  const exactLabel = new Date(lastMs).toLocaleString(
+    language === 'bn' ? 'bn-BD' : 'en-US',
+    {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }
+  );
+
+  return {
+    isOnline,
+    hasSeenBefore: true,
+    relativeLabel,
+    exactLabel,
+    activeEmail: email,
+  };
+}
+
 function pickDefined<T extends Record<string, unknown>>(obj: T, allowedKeys: string[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const key of allowedKeys) {
@@ -175,6 +247,14 @@ export function SuperAdminConsole({
   const [backupScannedOnce, setBackupScannedOnce] = useState(false);
   const [restoringKey, setRestoringKey] = useState<string | null>(null);
   const [backupNotice, setBackupNotice] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState<number>(() => Date.now());
+
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 30_000);
+    return () => window.clearInterval(id);
+  }, []);
 
   useEffect(() => {
     setPlatformName(platformConfig.platformName);
@@ -197,12 +277,18 @@ export function SuperAdminConsole({
     let trial = 0;
     let suspended = 0;
     let payingClinics = 0;
-    let mrrByCurrency: Record<string, number> = {};
+    let onlineNow = 0;
+    const mrrByCurrency: Record<string, number> = {};
 
     for (const c of clinics) {
       if (c.subscriptionStatus === 'active') active += 1;
       else if (c.subscriptionStatus === 'trial') trial += 1;
       else suspended += 1;
+
+      const lastMs = c.lastActiveAt?.toMillis?.() ?? 0;
+      if (lastMs > 0 && Math.max(0, nowMs - lastMs) <= ONLINE_WINDOW_MS) {
+        onlineNow += 1;
+      }
 
       if (c.subscriptionStatus !== 'suspended' && c.monthlyFeeAmount > 0) {
         payingClinics += 1;
@@ -212,8 +298,8 @@ export function SuperAdminConsole({
           (mrrByCurrency[c.currencySymbol] || 0) + monthlyEq;
       }
     }
-    return { active, trial, suspended, payingClinics, mrrByCurrency };
-  }, [clinics]);
+    return { active, trial, suspended, payingClinics, onlineNow, mrrByCurrency };
+  }, [clinics, nowMs]);
 
   const formattedMrrSummary = useMemo(() => {
     const entries = Object.entries(counts.mrrByCurrency);
@@ -239,11 +325,8 @@ export function SuperAdminConsole({
       });
       await batch.commit();
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = reportFirestoreError(err, OperationType.UPDATE, `clinics/${clinic.id}`);
       setConsoleError(msg);
-      if (msg.toLowerCase().includes('permission')) {
-        handleFirestoreError(err, OperationType.UPDATE, `clinics/${clinic.id}`);
-      }
     } finally {
       setTogglingClinicId(null);
     }
@@ -291,11 +374,8 @@ export function SuperAdminConsole({
       }
       setConfirmDeleteClinicId(null);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = reportFirestoreError(err, OperationType.DELETE, `clinics/${clinic.id}`);
       setConsoleError(msg);
-      if (msg.toLowerCase().includes('permission')) {
-        handleFirestoreError(err, OperationType.DELETE, `clinics/${clinic.id}`);
-      }
     } finally {
       setDeletingClinicId(null);
     }
@@ -332,11 +412,8 @@ export function SuperAdminConsole({
       setHostingSavedNotice(true);
       window.setTimeout(() => setHostingSavedNotice(false), 3000);
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = reportFirestoreError(err, OperationType.WRITE, 'platform_config/hosting');
       setConsoleError(msg);
-      if (msg.toLowerCase().includes('permission')) {
-        handleFirestoreError(err, OperationType.WRITE, 'platform_config/hosting');
-      }
     } finally {
       setSavingHosting(false);
     }
@@ -924,11 +1001,8 @@ export function SuperAdminConsole({
         );
       }
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
+      const msg = reportFirestoreError(err, OperationType.UPDATE, item.ref.path);
       setConsoleError(msg);
-      if (msg.toLowerCase().includes('permission')) {
-        handleFirestoreError(err, OperationType.UPDATE, item.ref.path);
-      }
     } finally {
       setRestoringKey(null);
     }
@@ -1020,9 +1094,19 @@ export function SuperAdminConsole({
       {/* 4-Column Platform KPI Strip */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="bg-white border border-slate-200 rounded-xl p-5">
-          <p className="text-xs font-medium text-slate-500">
-            {t('Hosted Clinics', 'হোস্টেড ক্লিনিক')}
-          </p>
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-xs font-medium text-slate-500">
+              {t('Hosted Clinics', 'হোস্টেড ক্লিনিক')}
+            </p>
+            <span className="inline-flex items-center gap-1.5 text-[11px] font-medium text-emerald-700 tabular-nums">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  counts.onlineNow > 0 ? 'bg-emerald-500 animate-pulse' : 'bg-slate-300'
+                }`}
+              />
+              {counts.onlineNow} {t('online now', 'এখন সক্রিয়')}
+            </span>
+          </div>
           <p className="font-display text-2xl font-semibold text-slate-900 mt-1 tabular-nums">
             {clinics.length}
           </p>
@@ -1158,6 +1242,7 @@ export function SuperAdminConsole({
                   <tr className="border-b border-slate-200 bg-slate-50/80 text-[11px] font-semibold text-slate-500">
                     <th className="py-3 px-4 whitespace-nowrap">{t('Clinic & Branding', 'ক্লিনিক ও ব্র্যান্ডিং')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Client Access', 'ক্লায়েন্ট অ্যাক্সেস')}</th>
+                    <th className="py-3 px-4 whitespace-nowrap">{t('Live Activity & Last Seen', 'সক্রিয়তা ও সর্বশেষ উপস্থিতি')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Plan & Storage', 'প্ল্যান ও স্টোরেজ')}</th>
                     <th className="py-3 px-4 whitespace-nowrap">{t('Status', 'অবস্থা')}</th>
                     <th className="py-3 px-4 whitespace-nowrap text-right">{t('Actions', 'কার্যক্রম')}</th>
@@ -1170,6 +1255,7 @@ export function SuperAdminConsole({
                     const diskStats = saasHealth?.storage.byClinic[clinic.id];
                     const isSuspended = clinic.subscriptionStatus === 'suspended';
                     const isConfirmingDelete = confirmDeleteClinicId === clinic.id;
+                    const presence = formatClientPresence(clinic, language, nowMs);
 
                     return (
                       <tr key={clinic.id} className="hover:bg-slate-50/70 transition-colors">
@@ -1206,6 +1292,49 @@ export function SuperAdminConsole({
                               </span>
                             )}
                           </p>
+                        </td>
+
+                        <td className="py-3.5 px-4 align-top whitespace-nowrap">
+                          {presence.isOnline ? (
+                            <div className="space-y-0.5">
+                              <span className="inline-flex items-center gap-1.5 font-semibold text-emerald-700">
+                                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse shrink-0" />
+                                {t('Active Now', 'এখন সক্রিয়')}
+                              </span>
+                              {presence.activeEmail && (
+                                <p className="text-[11px] font-mono text-slate-600 truncate max-w-[180px]">
+                                  {presence.activeEmail}
+                                </p>
+                              )}
+                              {presence.exactLabel && (
+                                <p className="text-[11px] text-slate-400 tabular-nums">
+                                  {presence.relativeLabel} · {presence.exactLabel}
+                                </p>
+                              )}
+                            </div>
+                          ) : presence.hasSeenBefore ? (
+                            <div className="space-y-0.5">
+                              <span className="inline-flex items-center gap-1.5 font-medium text-slate-700">
+                                <span className="w-2 h-2 rounded-full bg-slate-300 shrink-0" />
+                                {t('Last active:', 'সর্বশেষ:')} {presence.relativeLabel}
+                              </span>
+                              {presence.exactLabel && (
+                                <p className="text-[11px] text-slate-500 tabular-nums">
+                                  {presence.exactLabel}
+                                </p>
+                              )}
+                              {presence.activeEmail && (
+                                <p className="text-[11px] font-mono text-slate-400 truncate max-w-[180px]">
+                                  {presence.activeEmail}
+                                </p>
+                              )}
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-400">
+                              <span className="w-2 h-2 rounded-full bg-slate-200 shrink-0" />
+                              {presence.relativeLabel}
+                            </span>
+                          )}
                         </td>
 
                         <td className="py-3.5 px-4 align-top tabular-nums">

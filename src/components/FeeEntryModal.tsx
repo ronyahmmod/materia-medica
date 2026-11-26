@@ -1,7 +1,7 @@
 import { useMemo, useState, type FormEvent } from 'react';
 import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
 import { Banknote, Calculator, X } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { FEE_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import { computeFeeBreakdown, formatCashAmount } from '../lib/feeCalculations';
@@ -215,17 +215,13 @@ export function FeeEntryModal({
 
       onSaved();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          existingFee ? OperationType.UPDATE : OperationType.CREATE,
-          path
-        );
-      }
+      const msg = reportFirestoreError(
+        error,
+        existingFee ? OperationType.UPDATE : OperationType.CREATE,
+        path
+      );
       setErrorMsg(
-        error instanceof Error
-          ? error.message
-          : t('Unable to save cash fee entry.', 'নগদ ফি-এর হিসাব সংরক্ষণ করা যায়নি।')
+        msg || t('Unable to save cash fee entry.', 'নগদ ফি-এর হিসাব সংরক্ষণ করা যায়নি।')
       );
     } finally {
       setSubmitting(false);

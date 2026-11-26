@@ -10,7 +10,7 @@ import {
   Upload,
   X,
 } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, OperationType, reportFirestoreError } from '../firebase';
 import { computeFeeBreakdown, formatCashAmount } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
@@ -678,13 +678,9 @@ export function ConsultationFormModal({
 
       onSaved();
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.CREATE, path);
-      }
+      const msg = reportFirestoreError(error, OperationType.CREATE, path);
       setErrorMsg(
-        error instanceof Error
-          ? error.message
-          : t('Unable to save consultation.', 'কনসাল্টেশন সংরক্ষণ করা যায়নি।')
+        msg || t('Unable to save consultation.', 'কনসাল্টেশন সংরক্ষণ করা যায়নি।')
       );
     } finally {
       setSubmitting(false);

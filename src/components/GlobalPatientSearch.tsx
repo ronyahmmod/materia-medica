@@ -12,6 +12,7 @@ interface GlobalPatientSearchProps {
   activeClinicPatients: Patient[];
   isSuperAdmin: boolean;
   currentUserUid: string;
+  closeSignal?: boolean;
   onSelectPatient: (clinicId: string, patientId: string) => void;
   onViewAllInRegistry: (clinicId: string, queryText: string) => void;
 }
@@ -37,6 +38,7 @@ export function GlobalPatientSearch({
   activeClinicPatients,
   isSuperAdmin,
   currentUserUid,
+  closeSignal = false,
   onSelectPatient,
   onViewAllInRegistry,
 }: GlobalPatientSearchProps) {
@@ -56,6 +58,12 @@ export function GlobalPatientSearch({
   const inputRef = useRef<HTMLInputElement>(null);
   const lastFetchedAtRef = useRef<number>(0);
   const lastUidRef = useRef<string>(currentUserUid);
+
+  useEffect(() => {
+    if (closeSignal) {
+      setIsOpen(false);
+    }
+  }, [closeSignal]);
 
   // Reset multi-clinic search cache when user changes
   useEffect(() => {
@@ -291,6 +299,11 @@ export function GlobalPatientSearch({
         e.preventDefault();
         const chosen = matches[highlightedIndex] || matches[0];
         if (chosen) handleChoose(chosen);
+      } else if (trimmedQuery && activeClinic) {
+        e.preventDefault();
+        setIsOpen(false);
+        setQueryText('');
+        onViewAllInRegistry(activeClinic.id, trimmedQuery);
       }
     }
   };
@@ -340,9 +353,22 @@ export function GlobalPatientSearch({
               <X className="w-3.5 h-3.5" />
             </button>
           ) : (
-            <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono text-slate-400 bg-white border border-slate-200 rounded">
+            <button
+              type="button"
+              onClick={() => {
+                if (isOpen) {
+                  setIsOpen(false);
+                } else {
+                  setIsOpen(true);
+                  inputRef.current?.focus();
+                }
+              }}
+              aria-label={t('Toggle quick search list', 'দ্রুত অনুসন্ধান তালিকা খুলুন বা বন্ধ করুন')}
+              title={t('Click or press Ctrl+K to search patients', 'ক্লিক করুন অথবা Ctrl+K চাপুন')}
+              className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono text-slate-500 hover:text-slate-900 bg-white border border-slate-200 hover:border-slate-300 rounded cursor-pointer transition-colors"
+            >
               Ctrl K
-            </kbd>
+            </button>
           )}
         </div>
       </div>
@@ -351,7 +377,7 @@ export function GlobalPatientSearch({
         <div
           role="listbox"
           aria-label={t('Matching patient records', 'মিলে যাওয়া রোগীর তালিকা')}
-          className="fixed left-3 right-3 top-[4.25rem] sm:absolute sm:left-0 sm:right-0 sm:top-auto sm:mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-50 overflow-hidden"
+          className="fixed left-3 right-3 top-[4.25rem] sm:absolute sm:left-0 sm:right-0 sm:top-auto sm:mt-1.5 bg-white border border-slate-200 rounded-xl shadow-xl z-40 overflow-hidden"
         >
           <div className="px-3 py-2 border-b border-slate-100 bg-slate-50/70 flex flex-wrap items-center justify-between gap-2 text-[11px] text-slate-500">
             <div className="flex flex-wrap items-center gap-2">

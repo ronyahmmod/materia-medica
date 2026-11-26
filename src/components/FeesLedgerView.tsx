@@ -9,7 +9,7 @@ import {
   Trash2,
   Users,
 } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { FEE_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import {
@@ -143,13 +143,13 @@ export function FeesLedgerView({
       setSettlingFeeId(null);
       setSettleAmountInput('');
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${rec.id}`);
-      }
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/fee_records/${rec.id}`
+      );
       setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to record cash settlement.', 'বকেয়া নগদ আদায় সংরক্ষণ করা যায়নি।')
+        msg || t('Unable to record cash settlement.', 'বকেয়া নগদ আদায় সংরক্ষণ করা যায়নি।')
       );
     } finally {
       setSavingSettle(false);
@@ -164,13 +164,13 @@ export function FeesLedgerView({
       await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteId(null);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(error, OperationType.UPDATE, `clinics/${clinic.id}/fee_records/${feeId}`);
-      }
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${clinic.id}/fee_records/${feeId}`
+      );
       setActionError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to delete fee record.', 'ফি রেকর্ড মুছে ফেলা যায়নি।')
+        msg || t('Unable to delete fee record.', 'ফি রেকর্ড মুছে ফেলা যায়নি।')
       );
     }
   };

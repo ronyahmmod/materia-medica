@@ -50,7 +50,7 @@ import { RemedyReverseLookupView } from './components/RemedyReverseLookupView';
 import { RepertoryView } from './components/RepertoryView';
 import { SecureClinicalImage } from './components/SecureClinicalImage';
 import { SuperAdminConsole } from './components/SuperAdminConsole';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, OperationType, reportFirestoreError } from './firebase';
 import { LanguageSwitcher, useLanguage } from './i18n/LanguageContext';
 import {
   GENDER_LABELS_I18N,
@@ -58,6 +58,7 @@ import {
   PLAN_LABELS_I18N,
   STATUS_LABELS_I18N,
 } from './i18n/translations';
+import { copyTextSafely } from './lib/clipboardHelper';
 import {
   formatCashAmount,
   setActiveCurrencySymbol,
@@ -190,6 +191,7 @@ export default function App() {
   const [showClinicModal, setShowClinicModal] = useState(false);
   const [editingClinic, setEditingClinic] = useState<ClinicTenant | null>(null);
   const [copiedActiveUrl, setCopiedActiveUrl] = useState(false);
+  const [manualCopyUrlPrompt, setManualCopyUrlPrompt] = useState<string | null>(null);
 
   // Active Clinic Clinical State
   const [patients, setPatients] = useState<Patient[]>([]);
@@ -507,6 +509,60 @@ export default function App() {
     setSelectedPatientId(null);
   }, [activeClinic?.id, activeClinic?.currencySymbol]);
 
+  // Client workspace live presence heartbeat (writes lastActiveAt & lastActiveEmail for client logins)
+  useEffect(() => {
+    if (
+      !authReady ||
+      !authProviderResolved ||
+      effectiveIsSuperAdmin ||
+      !isPasswordClient ||
+      !currentUser?.email ||
+      !activeClinic?.id ||
+      activeClinic.subscriptionStatus === 'suspended'
+    ) {
+      return;
+    }
+
+    const clinicId = activeClinic.id;
+    const memberEmail = currentUser.email.trim().toLowerCase();
+    const sendHeartbeat = () => {
+      void updateDoc(doc(db, 'clinics', clinicId), {
+        lastActiveAt: serverTimestamp(),
+        lastActiveEmail: memberEmail,
+      }).catch(() => {
+        // Presence telemetry is non-fatal on transient offline/network interruptions
+      });
+    };
+
+    sendHeartbeat();
+
+    const intervalId = window.setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat();
+      }
+    }, 60_000);
+
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        sendHeartbeat();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    activeClinic?.id,
+    activeClinic?.subscriptionStatus,
+    authProviderResolved,
+    authReady,
+    currentUser?.email,
+    effectiveIsSuperAdmin,
+    isPasswordClient,
+  ]);
+
   const refreshStorageStats = useCallback(async () => {
     if (!auth.currentUser || !activeClinic?.id) return;
     try {
@@ -696,17 +752,13 @@ export default function App() {
         void refreshStorageStats();
       }
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.UPDATE,
-          `clinics/${activeClinic.id}/patients/${patient.id}`
-        );
-      }
+      const msg = reportFirestoreError(
+        error,
+        OperationType.UPDATE,
+        `clinics/${activeClinic.id}/patients/${patient.id}`
+      );
       setRegistryDeleteError(
-        error instanceof Error
-          ? error.message
-          : t('Unable to delete patient record.', 'রোগীর রেকর্ড মুছে ফেলা যায়নি।')
+        msg || t('Unable to delete patient record.', 'রোগীর রেকর্ড মুছে ফেলা যায়নি।')
       );
     } finally {
       setDeletingRegistryPatientId(null);
@@ -886,12 +938,13 @@ export default function App() {
   const handleCopyActiveClinicUrl = async () => {
     if (!activeClinic) return;
     const url = buildClinicShareUrl(activeClinic.slug, platformConfig.publicBaseUrl);
-    try {
-      await navigator.clipboard.writeText(url);
+    const copied = await copyTextSafely(url);
+    if (copied) {
+      setManualCopyUrlPrompt(null);
       setCopiedActiveUrl(true);
       window.setTimeout(() => setCopiedActiveUrl(false), 2000);
-    } catch {
-      // Ignore clipboard permission errors
+    } else {
+      setManualCopyUrlPrompt(url);
     }
   };
 
@@ -1178,13 +1231,14 @@ export default function App() {
       {/* Main Content Area */}
       <div className="flex-1 min-w-0 flex flex-col print:block">
         {/* Top Bar Contract */}
-        <header className="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 flex items-center justify-between gap-3 sm:gap-5 shrink-0 print:hidden">
-          <div className="flex items-center gap-3 min-w-0">
+        <header className="relative z-30 h-16 bg-white border-b border-slate-200 px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4 shrink-0 print:hidden">
+          <div className="flex items-center gap-2 sm:gap-3 shrink-0 md:min-w-0">
             <button
               type="button"
-              onClick={() => setMobileMenuOpen(true)}
-              aria-label="Open navigation"
-              className="p-2 -ml-2 text-slate-600 hover:text-slate-900 lg:hidden cursor-pointer shrink-0"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label={t('Toggle navigation menu', 'নেভিগেশন মেনু খুলুন বা বন্ধ করুন')}
+              aria-expanded={mobileMenuOpen}
+              className="inline-flex items-center justify-center p-2 -ml-1 text-slate-700 hover:text-slate-900 rounded-lg hover:bg-slate-100 lg:hidden cursor-pointer shrink-0 transition-colors"
             >
               <Menu className="w-5 h-5" />
             </button>
@@ -1207,6 +1261,7 @@ export default function App() {
             activeClinicPatients={patients}
             isSuperAdmin={effectiveIsSuperAdmin}
             currentUserUid={currentUser.uid}
+            closeSignal={mobileMenuOpen}
             onSelectPatient={(clinicId, patientId) => {
               if (clinicId !== activeClinic?.id) {
                 setSelectedClinicId(clinicId);
@@ -1229,22 +1284,24 @@ export default function App() {
             }}
           />
 
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
             {!showingSaasConsole && activeClinic && (
               <button
                 type="button"
                 onClick={handleCopyActiveClinicUrl}
-                className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
+                title={t('Copy Clinic URL', 'ক্লিনিক URL কপি')}
+                aria-label={t('Copy Clinic URL', 'ক্লিনিক URL কপি')}
+                className="inline-flex items-center gap-1.5 px-2.5 lg:px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors cursor-pointer whitespace-nowrap"
               >
                 {copiedActiveUrl ? (
                   <>
-                    <Check className="w-3.5 h-3.5 text-emerald-700" />
-                    {t('URL Copied', 'URL কপি হয়েছে')}
+                    <Check className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                    <span className="hidden lg:inline">{t('URL Copied', 'URL কপি হয়েছে')}</span>
                   </>
                 ) : (
                   <>
-                    <Copy className="w-3.5 h-3.5" />
-                    {t('Copy Clinic URL', 'ক্লিনিক URL কপি')}
+                    <Copy className="w-3.5 h-3.5 shrink-0" />
+                    <span className="hidden lg:inline">{t('Copy Clinic URL', 'ক্লিনিক URL কপি')}</span>
                   </>
                 )}
               </button>
@@ -1259,23 +1316,47 @@ export default function App() {
                   setEditingClinic(null);
                   setShowClinicModal(true);
                 }}
-                className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                className="inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium text-white bg-teal-700 rounded-lg hover:bg-teal-800 transition-colors cursor-pointer whitespace-nowrap shrink-0"
               >
                 <Plus className="w-3.5 h-3.5" />
-                {t('New Client', 'নতুন ক্লায়েন্ট')}
+                <span className="hidden sm:inline">{t('New Client', 'নতুন ক্লায়েন্ট')}</span>
               </button>
             ) : activeClinic ? (
               <button
                 type="button"
                 onClick={openNewPatientModal}
-                className={`inline-flex items-center gap-1.5 px-4 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${palette.primaryBtn}`}
+                className={`inline-flex items-center gap-1.5 px-3 sm:px-4 py-2 text-xs font-medium rounded-lg transition-colors cursor-pointer whitespace-nowrap shrink-0 ${palette.primaryBtn}`}
               >
                 <Plus className="w-3.5 h-3.5" />
-                {t('New Patient', 'নতুন রোগী')}
+                <span className="hidden sm:inline">{t('New Patient', 'নতুন রোগী')}</span>
               </button>
             ) : null}
           </div>
         </header>
+
+        {manualCopyUrlPrompt && (
+          <div className="bg-slate-100 border-b border-slate-200 px-4 sm:px-6 py-2 flex flex-wrap items-center justify-between gap-2 text-xs print:hidden">
+            <div className="flex items-center gap-2 flex-1 min-w-[220px]">
+              <span className="font-medium text-slate-700 shrink-0">
+                {t('Clinic URL:', 'ক্লিনিক URL:')}
+              </span>
+              <input
+                type="text"
+                readOnly
+                value={manualCopyUrlPrompt}
+                onFocus={(e) => e.currentTarget.select()}
+                className="flex-1 px-2.5 py-1 text-xs font-mono bg-white border border-slate-300 rounded text-slate-900"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setManualCopyUrlPrompt(null)}
+              className="px-2 py-1 text-xs font-medium text-slate-600 hover:text-slate-900 cursor-pointer"
+            >
+              {t('Close', 'বন্ধ')}
+            </button>
+          </div>
+        )}
 
         {/* Optional Platform Maintenance Notice Banner */}
         {platformConfig.maintenanceNotice && (
@@ -1414,8 +1495,18 @@ export default function App() {
                         'Search name, case #, phone, address, remedy...',
                         'নাম, কেস নং, ফোন, ঠিকানা বা রেমেডি...'
                       )}
-                      className="pl-9 pr-3 py-2 text-xs w-64 sm:w-72 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
+                      className="pl-9 pr-8 py-2 text-xs w-64 sm:w-72 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-teal-700/20 focus:border-teal-700"
                     />
+                    {searchQuery && (
+                      <button
+                        type="button"
+                        onClick={() => setSearchQuery('')}
+                        aria-label={t('Clear search', 'অনুসন্ধান মুছুন')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-0.5 text-slate-400 hover:text-slate-700 cursor-pointer"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                   </div>
 
                   <div className="inline-flex items-center gap-1 p-1 bg-slate-200/70 rounded-lg">

@@ -22,7 +22,7 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { auth, handleFirestoreError, OperationType } from '../firebase';
+import { auth, handleFirestoreError, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { REPERTORY_CHAPTER_LABELS_I18N } from '../i18n/translations';
 import {
@@ -845,14 +845,12 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
     try {
       await setDoc(tenantRepertoryDoc(clinic.id, entryId), payload);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          OperationType.CREATE,
-          `clinics/${clinic.id}/repertory_entries/${entryId}`
-        );
-      }
-      setQuickError(error instanceof Error ? error.message : 'Unable to save suggested rubric.');
+      const msg = reportFirestoreError(
+        error,
+        OperationType.CREATE,
+        `clinics/${clinic.id}/repertory_entries/${entryId}`
+      );
+      setQuickError(msg || 'Unable to save suggested rubric.');
     } finally {
       setSavingSuggestionKey(null);
     }
@@ -957,14 +955,12 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
 
       setShowModal(false);
     } catch (error) {
-      if (error instanceof Error && error.message.includes('Missing or insufficient permissions')) {
-        handleFirestoreError(
-          error,
-          editingEntry ? OperationType.UPDATE : OperationType.CREATE,
-          path
-        );
-      }
-      setFormError(error instanceof Error ? error.message : 'Unable to save repertory rubric.');
+      const msg = reportFirestoreError(
+        error,
+        editingEntry ? OperationType.UPDATE : OperationType.CREATE,
+        path
+      );
+      setFormError(msg || 'Unable to save repertory rubric.');
     } finally {
       setSubmitting(false);
     }
@@ -977,7 +973,7 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
       await updateDoc(tenantRepertoryDoc(clinic.id, entryId), buildSoftDeletePayload(uid, true));
       setConfirmDeleteId(null);
     } catch (error) {
-      handleFirestoreError(
+      reportFirestoreError(
         error,
         OperationType.UPDATE,
         `clinics/${clinic.id}/repertory_entries/${entryId}`
@@ -1009,7 +1005,7 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
         });
       }
     } catch (error) {
-      handleFirestoreError(error, OperationType.CREATE, `clinics/${clinic.id}/repertory_entries`);
+      reportFirestoreError(error, OperationType.CREATE, `clinics/${clinic.id}/repertory_entries`);
     } finally {
       setSeeding(false);
     }
