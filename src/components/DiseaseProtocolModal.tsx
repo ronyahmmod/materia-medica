@@ -287,6 +287,9 @@ export function DiseaseProtocolModal({
       };
 
       if (existingEntry) {
+        if (!existingEntry.clinicId) {
+          payload.clinicId = clinic.id;
+        }
         await updateDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), payload);
       } else {
         payload.clinicId = clinic.id;
@@ -303,9 +306,47 @@ export function DiseaseProtocolModal({
         path
       );
       if (msg.toLowerCase().includes('permission')) {
-        const signedInEmail = auth.currentUser?.email || 'unknown';
+        const signedInEmail = (auth.currentUser?.email || 'unknown').toLowerCase();
         const providerId = auth.currentUser?.providerData?.[0]?.providerId || 'unknown';
-        const diag = `[${signedInEmail} · ${providerId} · status:${clinic.subscriptionStatus}] ${msg}`;
+        const op = existingEntry ? 'update' : 'create';
+        const uidOk = Boolean(clinic.authorizedUids?.includes(uid));
+        const emailOk = Boolean(clinic.accessEmails?.includes(signedInEmail));
+        const allowedKeys = new Set([
+          'id',
+          'clinicId',
+          'clinicAccessEmails',
+          'clinicAccessUids',
+          'patientScope',
+          'diseaseName',
+          'symptoms',
+          'symptomRules',
+          'firstRemedyMorning',
+          'firstRemedyPotency',
+          'secondRemedyAfternoon',
+          'secondRemedyPotency',
+          'dosageInstructions',
+          'clinicalNotes',
+          'isDeleted',
+          'deletedAt',
+          'deletedBy',
+          'restoredAt',
+          'createdBy',
+          'createdAt',
+          'updatedAt',
+        ]);
+        const extraKeys = existingEntry
+          ? Object.keys(existingEntry).filter((k) => !allowedKeys.has(k))
+          : [];
+        const flags = [
+          `op:${op}`,
+          `uidOk:${uidOk}`,
+          `emailOk:${emailOk}`,
+          `cId:${Boolean(existingEntry?.clinicId ?? true)}`,
+          `cBy:${Boolean(existingEntry?.createdBy ?? true)}`,
+          `cAt:${Boolean(existingEntry?.createdAt ?? true)}`,
+          ...(extraKeys.length > 0 ? [`extra:${extraKeys.join(',')}`] : []),
+        ].join(' ');
+        const diag = `[${signedInEmail} · ${providerId} · status:${clinic.subscriptionStatus} · ${flags}] ${msg}`;
         setFormError(
           t(
             `Permission denied while saving (${diag}). Please refresh the page or check clinic access permissions.`,

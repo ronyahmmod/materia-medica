@@ -57,7 +57,11 @@ service cloud.firestore {
       return isClientPasswordUser()
         && exists(/databases/$(database)/documents/clinics/$(clinicId))
         && request.auth.uid in clinicDoc(clinicId).data.authorizedUids
-        && userEmailLower() in clinicDoc(clinicId).data.accessEmails;
+        && (
+          userEmailLower() in clinicDoc(clinicId).data.accessEmails
+          || request.auth.token.email in clinicDoc(clinicId).data.accessEmails
+          || clinicDoc(clinicId).data.ownerEmail.lower() == userEmailLower()
+        );
     }
 
     function isClinicActiveMember(clinicId) {
@@ -965,7 +969,10 @@ service cloud.firestore {
           && isValidId(entryId)
           && isClinicWritable(clinicId)
           && isValidDiseaseRemedyEntryBase(incoming(), true)
-          && incoming().clinicId == existing().clinicId
+          && (
+            ('clinicId' in existing() && incoming().clinicId == existing().clinicId)
+            || (!('clinicId' in existing()) && incoming().clinicId == clinicId)
+          )
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
@@ -976,7 +983,7 @@ service cloud.firestore {
               && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicAccessEmails', 'clinicAccessUids',
+                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                 'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
                 'firstRemedyMorning', 'firstRemedyPotency',
                 'secondRemedyAfternoon', 'secondRemedyPotency',
