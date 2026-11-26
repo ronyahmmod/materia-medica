@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
-import { serverTimestamp, setDoc, updateDoc } from 'firebase/firestore';
+import { doc, getDocFromServer, serverTimestamp, setDoc, Timestamp, updateDoc } from 'firebase/firestore';
 import { CopyPlus, Loader2, Pill, Plus, Trash2, X } from 'lucide-react';
-import { auth, OperationType, reportFirestoreError } from '../firebase';
+import { auth, db, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   DISEASE_SCOPE_LABELS_I18N,
@@ -337,13 +337,57 @@ export function DiseaseProtocolModal({
         const extraKeys = existingEntry
           ? Object.keys(existingEntry).filter((k) => !allowedKeys.has(k))
           : [];
+
+        // Probe read access & fresh server doc state to isolate isClinicMember vs rule validation failure
+        let clinicGetOk = 'err';
+        let emailsExact = 'na';
+        let uidsExact = 'na';
+        try {
+          const cSnap = await getDocFromServer(doc(db, 'clinics', clinic.id));
+          clinicGetOk = cSnap.exists() ? 'ok' : 'missing';
+          if (cSnap.exists()) {
+            const cData = cSnap.data() as Record<string, unknown>;
+            emailsExact =
+              JSON.stringify(cData.accessEmails) === JSON.stringify(accessEmails) ? 'eq' : 'diff';
+            uidsExact =
+              JSON.stringify(cData.authorizedUids) === JSON.stringify(accessUids) ? 'eq' : 'diff';
+          }
+        } catch {
+          clinicGetOk = 'denied';
+        }
+
+        let entryGetOk = 'na';
+        let isDelStr = 'na';
+        let cAtTs = 'na';
+        if (existingEntry) {
+          try {
+            const eSnap = await getDocFromServer(tenantDiseaseRemedyDoc(clinic.id, entryId));
+            entryGetOk = eSnap.exists() ? 'ok' : 'missing';
+            if (eSnap.exists()) {
+              const eData = eSnap.data() as Record<string, unknown>;
+              isDelStr = String(eData.isDeleted);
+              cAtTs = String(eData.createdAt instanceof Timestamp);
+            }
+          } catch {
+            entryGetOk = 'denied';
+          }
+        }
+
         const flags = [
           `op:${op}`,
+          `cGet:${clinicGetOk}`,
+          `eGet:${entryGetOk}`,
+          `eEq:${emailsExact}`,
+          `uEq:${uidsExact}`,
           `uidOk:${uidOk}`,
           `emailOk:${emailOk}`,
           `cId:${Boolean(existingEntry?.clinicId ?? true)}`,
           `cBy:${Boolean(existingEntry?.createdBy ?? true)}`,
           `cAt:${Boolean(existingEntry?.createdAt ?? true)}`,
+          `cAtTs:${cAtTs}`,
+          `isDel:${isDelStr}`,
+          `idOk:${/^[a-zA-Z0-9_-]{1,128}$/.test(entryId)}`,
+          `rLen:${sanitizedRules.length}`,
           ...(extraKeys.length > 0 ? [`extra:${extraKeys.join(',')}`] : []),
         ].join(' ');
         const diag = `[${signedInEmail} · ${providerId} · status:${clinic.subscriptionStatus} · ${flags}] ${msg}`;
