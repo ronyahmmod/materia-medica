@@ -88,16 +88,18 @@ service cloud.firestore {
       return !('isDeleted' in data) || data.isDeleted == false;
     }
 
-    // Clients may remain active or perform soft-delete; only Super Admin can un-delete (restore)
+    // Clients perform direct hard-deletes and cannot mutate soft-delete/restore flags; only Super Admin can restore historical soft-deleted records
     function isClientSoftDeleteStateValid(inc, ex) {
-      return (
-        ((!('isDeleted' in ex) || ex.isDeleted == false) && (!('isDeleted' in inc) || inc.isDeleted == false))
-        || (
-          inc.isDeleted == true
-          && 'deletedBy' in inc && inc.deletedBy == request.auth.uid
-          && 'deletedAt' in inc && inc.deletedAt is string && inc.deletedAt.size() >= 8 && inc.deletedAt.size() <= 40
-        )
-      );
+      return isNotCreatingDeleted(ex)
+        && isNotCreatingDeleted(inc)
+        && isFieldUnchanged(inc, ex, 'deletedAt')
+        && isFieldUnchanged(inc, ex, 'deletedBy')
+        && isFieldUnchanged(inc, ex, 'restoredAt');
+    }
+
+    function isFieldUnchanged(inc, ex, key) {
+      return (!(key in ex) && !(key in inc))
+        || (key in ex && key in inc && inc[key] == ex[key]);
     }
 
     function isTenantClinicIdValidOnUpdate(clinicId, inc, ex) {
@@ -634,15 +636,31 @@ service cloud.firestore {
             && incoming().lastActiveAt == request.time
             && 'lastActiveEmail' in incoming()
             && incoming().lastActiveEmail == userEmailLower()
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'lastActiveAt', 'lastActiveEmail'
-            ])
+            && incoming().slug == existing().slug
+            && incoming().clinicName == existing().clinicName
+            && incoming().practitionerName == existing().practitionerName
+            && incoming().ownerEmail == existing().ownerEmail
+            && incoming().accessEmails == existing().accessEmails
+            && incoming().authorizedUids == existing().authorizedUids
+            && incoming().currencySymbol == existing().currencySymbol
+            && incoming().accentColor == existing().accentColor
+            && incoming().planTier == existing().planTier
+            && incoming().subscriptionStatus == existing().subscriptionStatus
+            && incoming().patientLimit == existing().patientLimit
+            && incoming().storageLimitMb == existing().storageLimitMb
+            && incoming().monthlyFeeAmount == existing().monthlyFeeAmount
+            && incoming().billingCycle == existing().billingCycle
+            && isFieldUnchanged(incoming(), existing(), 'tagline')
+            && isFieldUnchanged(incoming(), existing(), 'phone')
+            && isFieldUnchanged(incoming(), existing(), 'address')
+            && isFieldUnchanged(incoming(), existing(), 'hostingProvider')
+            && isFieldUnchanged(incoming(), existing(), 'subscriptionNotes')
           )
         );
 
       allow delete: if isValidId(clinicId) && isPrimaryAdmin();
 
-      // Tenant Patients Subcollection (Clients can soft-delete only; Super Admin restores or purges)
+      // Tenant Patients Subcollection (Clients have full CRUD within their active clinic)
       match /patients/{patientId} {
         allow list: if isPrimaryAdmin()
           || (
@@ -678,19 +696,10 @@ service cloud.firestore {
             || (
               isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
-                'caseNumber', 'fullName', 'age', 'gender', 'phone',
-                'email', 'address', 'chiefComplaint', 'thermalState',
-                'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
-                'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy',
-                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-              ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(patientId) && isPrimaryAdmin();
+        allow delete: if isValidId(clinicId) && isValidId(patientId) && isClinicWritable(clinicId);
 
         // Tenant Consultations Subcollection
         match /consultations/{consultationId} {
@@ -732,21 +741,11 @@ service cloud.firestore {
               || (
                 isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
-                && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                  'visitDate', 'diseaseName', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
-                  'modalitiesWorse', 'modalitiesBetter',
-                  'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
-                  'secondRemedyAfternoon', 'secondRemedyCompanion', 'secondRemedyPotency',
-                  'globulesDose', 'ounceAmount', 'phialCount', 'extraPotency', 'biochemicMedicine',
-                  'remedyName', 'potency', 'dosage', 'clinicalNotes', 'nextFollowUpDate', 'photoIds',
-                  'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-                ])
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(consultationId)
-            && isPrimaryAdmin();
+            && isClinicWritable(clinicId);
         }
 
         // Tenant Clinical Photos Subcollection
@@ -787,16 +786,15 @@ service cloud.firestore {
               || (
                 isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
-                && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                  'caption', 'category', 'consultationId',
-                  'isDeleted', 'deletedAt', 'deletedBy'
-                ])
+                && isFieldUnchanged(incoming(), existing(), 'fileName')
+                && isFieldUnchanged(incoming(), existing(), 'url')
+                && isFieldUnchanged(incoming(), existing(), 'mimeType')
+                && isFieldUnchanged(incoming(), existing(), 'sizeBytes')
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(photoId)
-            && isPrimaryAdmin();
+            && isClinicWritable(clinicId);
         }
 
         // Tenant Clinical Notes Subcollection
@@ -839,16 +837,11 @@ service cloud.firestore {
               || (
                 isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
-                && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                  'observedDate', 'focusArea', 'content',
-                  'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-                ])
               )
             );
 
           allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(noteId)
-            && isPrimaryAdmin();
+            && isClinicWritable(clinicId);
         }
       }
 
@@ -891,16 +884,11 @@ service cloud.firestore {
             || (
               isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                'patientName', 'caseNumber', 'collectedDate', 'feeType',
-                'feeAmount', 'discountAmount', 'netAmount', 'cashPaid', 'dueAmount',
-                'notes', 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-              ])
+              && isFieldUnchanged(incoming(), existing(), 'consultationId')
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(feeId) && isPrimaryAdmin();
+        allow delete: if isValidId(clinicId) && isValidId(feeId) && isClinicWritable(clinicId);
       }
 
       // Tenant Repertory Clinical Reference Collection
@@ -939,16 +927,10 @@ service cloud.firestore {
             || (
               isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                'chapter', 'rubric', 'primaryRemedy', 'remedies',
-                'modalities', 'symptomNotes',
-                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-              ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(entryId) && isPrimaryAdmin();
+        allow delete: if isValidId(clinicId) && isValidId(entryId) && isClinicWritable(clinicId);
       }
 
       // Tenant Disease -> Symptoms -> Remedies Database Collection
@@ -987,18 +969,10 @@ service cloud.firestore {
             || (
               isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
-              && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-                'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
-                'firstRemedyMorning', 'firstRemedyPotency',
-                'secondRemedyAfternoon', 'secondRemedyPotency',
-                'dosageInstructions', 'clinicalNotes',
-                'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
-              ])
             )
           );
 
-        allow delete: if isValidId(clinicId) && isValidId(entryId) && isPrimaryAdmin();
+        allow delete: if isValidId(clinicId) && isValidId(entryId) && isClinicWritable(clinicId);
       }
     }
 

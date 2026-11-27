@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from 'react';
 import {
+  deleteDoc,
+  getDocs,
   onSnapshot,
   query,
   serverTimestamp,
@@ -38,7 +40,7 @@ import {
 } from '../firebase';
 import { formatCashAmount, roundAmount, summarizeFees } from '../lib/feeCalculations';
 import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
-import { uploadClinicalPhoto } from '../lib/photoApi';
+import { deleteServerPhoto, uploadClinicalPhoto } from '../lib/photoApi';
 import {
   downloadPrintableHtmlReport,
   findPrintableReportSheet,
@@ -50,7 +52,6 @@ import {
 } from '../lib/repertoryApi';
 import {
   ACCENT_THEME_PALETTES,
-  buildSoftDeletePayload,
   buildTenantAclPayload,
   tenantConsultationDoc,
   tenantConsultationsCol,
@@ -447,10 +448,10 @@ export function PatientDetailView({
     if (!uid) return;
     try {
       const aclFields = buildTenantAclPayload(clinic, uid);
-      await updateDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id), {
-        ...buildSoftDeletePayload(uid, false),
-        ...aclFields,
-      });
+      await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id));
+      await deleteServerPhoto(patient.id, photo.fileName, photo.url, clinic.id).catch(
+        () => undefined
+      );
       if (patient.portraitPhotoId === photo.id) {
         await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
           ...aclFields,
@@ -467,7 +468,7 @@ export function PatientDetailView({
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/patients/${patient.id}/photos/${photo.id}`
       );
       setActionError(msg || t('Failed to delete photo.', 'ছবি মুছে ফেলা যায়নি।'));
@@ -479,15 +480,12 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId));
       setConfirmDeleteConsultationId(null);
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/patients/${patient.id}/consultations/${consultationId}`
       );
       setActionError(msg || t('Failed to delete consultation.', 'ভিজিট মুছে ফেলা যায়নি।'));
@@ -576,15 +574,12 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantNoteDoc(clinic.id, patient.id, noteId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantNoteDoc(clinic.id, patient.id, noteId));
       setConfirmDeleteNoteId(null);
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${noteId}`
       );
       setActionError(msg || t('Unable to delete clinical note.', 'ক্লিনিক্যাল নোট মুছে ফেলা যায়নি।'));
@@ -690,15 +685,12 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantFeeDoc(clinic.id, feeId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantFeeDoc(clinic.id, feeId));
       setConfirmDeleteFeeId(null);
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/fee_records/${feeId}`
       );
       setActionError(msg || t('Unable to delete cash fee entry.', 'নগদ ফি রেকর্ড মুছে ফেলা যায়নি।'));
@@ -711,32 +703,56 @@ export function PatientDetailView({
     setDeletingPatient(true);
     setActionError(null);
     try {
-      const aclFields = buildTenantAclPayload(clinic, uid);
-      const softDeleteNoUpdated = { ...buildSoftDeletePayload(uid, false), ...aclFields };
-      const softDeleteWithUpdated = { ...buildSoftDeletePayload(uid, true), ...aclFields };
+      const consSource = isSuperAdmin
+        ? tenantConsultationsCol(clinic.id, patient.id)
+        : query(
+            tenantConsultationsCol(clinic.id, patient.id),
+            where('clinicAccessUids', 'array-contains', uid)
+          );
+      const photosSource = isSuperAdmin
+        ? tenantPhotosCol(clinic.id, patient.id)
+        : query(
+            tenantPhotosCol(clinic.id, patient.id),
+            where('clinicAccessUids', 'array-contains', uid)
+          );
+      const notesSource = isSuperAdmin
+        ? tenantNotesCol(clinic.id, patient.id)
+        : query(
+            tenantNotesCol(clinic.id, patient.id),
+            where('clinicAccessUids', 'array-contains', uid)
+          );
 
-      for (const photo of photos) {
-        await updateDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id), softDeleteNoUpdated);
+      const [consSnap, photosSnap, notesSnap] = await Promise.all([
+        getDocs(consSource),
+        getDocs(photosSource),
+        getDocs(notesSource),
+      ]);
+
+      for (const phDoc of photosSnap.docs) {
+        const phData = phDoc.data() as { fileName?: string; url?: string };
+        await deleteDoc(tenantPhotoDoc(clinic.id, patient.id, phDoc.id));
+        if (phData?.fileName) {
+          await deleteServerPhoto(patient.id, phData.fileName, phData.url, clinic.id).catch(
+            () => undefined
+          );
+        }
       }
-      for (const con of consultations) {
-        await updateDoc(
-          tenantConsultationDoc(clinic.id, patient.id, con.id),
-          softDeleteWithUpdated
-        );
+      for (const conDoc of consSnap.docs) {
+        await deleteDoc(tenantConsultationDoc(clinic.id, patient.id, conDoc.id));
       }
-      for (const note of clinicalNotes) {
-        await updateDoc(tenantNoteDoc(clinic.id, patient.id, note.id), softDeleteWithUpdated);
+      for (const nDoc of notesSnap.docs) {
+        await deleteDoc(tenantNoteDoc(clinic.id, patient.id, nDoc.id));
       }
-      for (const fee of visibleFeeRecords) {
-        await updateDoc(tenantFeeDoc(clinic.id, fee.id), softDeleteWithUpdated);
+      for (const fee of feeRecords) {
+        await deleteDoc(tenantFeeDoc(clinic.id, fee.id));
       }
-      await updateDoc(tenantPatientDoc(clinic.id, patient.id), softDeleteWithUpdated);
+      await deleteDoc(tenantPatientDoc(clinic.id, patient.id));
       onPhotoStorageChanged();
       onDeletedPatient();
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/patients/${patient.id}`
       );
       setActionError(msg || t('Unable to delete patient record.', 'রোগীর রেকর্ড মুছে ফেলা যায়নি।'));

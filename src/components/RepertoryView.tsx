@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
 import {
+  deleteDoc,
   onSnapshot,
   query,
   serverTimestamp,
@@ -35,7 +36,6 @@ import {
 } from '../lib/repertoryApi';
 import {
   ACCENT_THEME_PALETTES,
-  buildSoftDeletePayload,
   buildTenantAclPayload,
   tenantRepertoryCol,
   tenantRepertoryDoc,
@@ -972,15 +972,12 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantRepertoryDoc(clinic.id, entryId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantRepertoryDoc(clinic.id, entryId));
       setConfirmDeleteId(null);
     } catch (error) {
       reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/repertory_entries/${entryId}`
       );
     }

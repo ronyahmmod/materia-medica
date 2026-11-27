@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { serverTimestamp, updateDoc } from 'firebase/firestore';
+import { deleteDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import {
   Banknote,
   CheckCircle2,
@@ -20,7 +20,6 @@ import {
 } from '../lib/feeCalculations';
 import {
   ACCENT_THEME_PALETTES,
-  buildSoftDeletePayload,
   buildTenantAclPayload,
   tenantFeeDoc,
 } from '../lib/tenantPaths';
@@ -167,15 +166,12 @@ export function FeesLedgerView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantFeeDoc(clinic.id, feeId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantFeeDoc(clinic.id, feeId));
       setConfirmDeleteId(null);
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/fee_records/${feeId}`
       );
       setActionError(

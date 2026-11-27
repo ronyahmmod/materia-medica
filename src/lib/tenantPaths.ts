@@ -298,21 +298,6 @@ export function tenantDiseaseRemedyDoc(clinicId: string, entryId: string) {
   return doc(db, 'clinics', clinicId, 'disease_remedies', entryId);
 }
 
-export function buildSoftDeletePayload(
-  deletedByUid: string,
-  includeUpdatedAt = true
-): Record<string, unknown> {
-  const payload: Record<string, unknown> = {
-    isDeleted: true,
-    deletedAt: new Date().toISOString().slice(0, 32),
-    deletedBy: deletedByUid,
-  };
-  if (includeUpdatedAt) {
-    payload.updatedAt = serverTimestamp();
-  }
-  return payload;
-}
-
 export function buildTenantAclPayload(
   clinic: Pick<ClinicTenant, 'id' | 'accessEmails' | 'authorizedUids' | 'ownerEmail'>,
   fallbackUid?: string

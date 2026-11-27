@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
+  deleteDoc,
   onSnapshot,
   query,
-  updateDoc,
   where,
 } from 'firebase/firestore';
 import {
@@ -25,8 +25,6 @@ import {
 import { deriveRulesFromDiseaseEntry } from '../lib/diseaseCatalog';
 import {
   ACCENT_THEME_PALETTES,
-  buildSoftDeletePayload,
-  buildTenantAclPayload,
   tenantDiseaseRemediesCol,
   tenantDiseaseRemedyDoc,
 } from '../lib/tenantPaths';
@@ -188,20 +186,17 @@ export function DiseaseDatabaseView({
     setShowFormModal(true);
   };
 
-  const handleSoftDelete = async (entryId: string) => {
+  const handleDeleteEntry = async (entryId: string) => {
     setActionError(null);
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), {
-        ...buildSoftDeletePayload(uid, true),
-        ...buildTenantAclPayload(clinic, uid),
-      });
+      await deleteDoc(tenantDiseaseRemedyDoc(clinic.id, entryId));
       setConfirmDeleteId(null);
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${clinic.id}/disease_remedies/${entryId}`
       );
       setActionError(
@@ -479,12 +474,12 @@ export function DiseaseDatabaseView({
                   {isDeleting && (
                     <div className="p-2.5 bg-red-50 border border-red-200 rounded-lg flex items-center justify-between gap-2 text-xs">
                       <span className="text-red-900">
-                        {t('Move this protocol to deleted backup?', 'এই তথ্যটি মুছে ব্যাকআপে রাখবেন?')}
+                        {t('Delete this protocol permanently?', 'এই তথ্যটি স্থায়ীভাবে মুছে ফেলবেন?')}
                       </span>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
                           type="button"
-                          onClick={() => handleSoftDelete(entry.id)}
+                          onClick={() => handleDeleteEntry(entry.id)}
                           className="px-2.5 py-1 text-xs font-medium text-white bg-red-700 rounded hover:bg-red-800 cursor-pointer"
                         >
                           {t('Delete', 'মুছুন')}

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { onAuthStateChanged, signOut, type User } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -66,6 +67,7 @@ import {
 } from './lib/feeCalculations';
 import { formatBytes } from './lib/imageCompressor';
 import {
+  deleteServerPhoto,
   fetchSaasPlatformHealth,
   fetchStorageStats,
   type SaasPlatformHealthResponse,
@@ -76,7 +78,6 @@ import {
   buildClinicShareUrl,
   buildDefaultPlatformConfig,
   buildPublicProfilePayload,
-  buildSoftDeletePayload,
   buildTenantAclPayload,
   DEFAULT_PLATFORM_CONFIG_ID,
   extractClinicSlugFromLocation,
@@ -687,17 +688,13 @@ export default function App() {
   const [deletingRegistryPatientId, setDeletingRegistryPatientId] = useState<string | null>(null);
   const [registryDeleteError, setRegistryDeleteError] = useState<string | null>(null);
 
-  const handleSoftDeletePatientFromRegistry = async (patient: Patient) => {
+  const handleDeletePatientFromRegistry = async (patient: Patient) => {
     if (!activeClinic) return;
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     setDeletingRegistryPatientId(patient.id);
     setRegistryDeleteError(null);
     try {
-      const aclFields = buildTenantAclPayload(activeClinic, uid);
-      const softDeleteNoUpdated = { ...buildSoftDeletePayload(uid, false), ...aclFields };
-      const softDeleteWithUpdated = { ...buildSoftDeletePayload(uid, true), ...aclFields };
-
       const consSource = effectiveIsSuperAdmin
         ? tenantConsultationsCol(activeClinic.id, patient.id)
         : query(
@@ -725,26 +722,26 @@ export default function App() {
 
       let deletedPhotoCount = 0;
       for (const phDoc of photosSnap.docs) {
-        if (phDoc.data()?.isDeleted === true) continue;
+        const phData = phDoc.data() as { fileName?: string; url?: string };
         deletedPhotoCount += 1;
-        await updateDoc(tenantPhotoDoc(activeClinic.id, patient.id, phDoc.id), softDeleteNoUpdated);
+        await deleteDoc(tenantPhotoDoc(activeClinic.id, patient.id, phDoc.id));
+        if (phData?.fileName) {
+          await deleteServerPhoto(patient.id, phData.fileName, phData.url, activeClinic.id).catch(
+            () => undefined
+          );
+        }
       }
       for (const conDoc of consSnap.docs) {
-        if (conDoc.data()?.isDeleted === true) continue;
-        await updateDoc(
-          tenantConsultationDoc(activeClinic.id, patient.id, conDoc.id),
-          softDeleteWithUpdated
-        );
+        await deleteDoc(tenantConsultationDoc(activeClinic.id, patient.id, conDoc.id));
       }
       for (const nDoc of notesSnap.docs) {
-        if (nDoc.data()?.isDeleted === true) continue;
-        await updateDoc(tenantNoteDoc(activeClinic.id, patient.id, nDoc.id), softDeleteWithUpdated);
+        await deleteDoc(tenantNoteDoc(activeClinic.id, patient.id, nDoc.id));
       }
-      const linkedFees = feeRecords.filter((f) => f.patientId === patient.id && !f.isDeleted);
+      const linkedFees = feeRecords.filter((f) => f.patientId === patient.id);
       for (const fee of linkedFees) {
-        await updateDoc(tenantFeeDoc(activeClinic.id, fee.id), softDeleteWithUpdated);
+        await deleteDoc(tenantFeeDoc(activeClinic.id, fee.id));
       }
-      await updateDoc(tenantPatientDoc(activeClinic.id, patient.id), softDeleteWithUpdated);
+      await deleteDoc(tenantPatientDoc(activeClinic.id, patient.id));
 
       if (selectedPatientId === patient.id) {
         setSelectedPatientId(null);
@@ -756,7 +753,7 @@ export default function App() {
     } catch (error) {
       const msg = reportFirestoreError(
         error,
-        OperationType.UPDATE,
+        OperationType.DELETE,
         `clinics/${activeClinic.id}/patients/${patient.id}`
       );
       setRegistryDeleteError(
@@ -1676,7 +1673,7 @@ export default function App() {
                                     <button
                                       type="button"
                                       disabled={isDeletingThis}
-                                      onClick={() => handleSoftDeletePatientFromRegistry(patient)}
+                                      onClick={() => handleDeletePatientFromRegistry(patient)}
                                       className="px-2 py-0.5 text-[11px] font-medium text-white bg-red-700 rounded hover:bg-red-800 disabled:opacity-50 cursor-pointer"
                                     >
                                       {isDeletingThis

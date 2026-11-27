@@ -1955,8 +1955,8 @@ export function SuperAdminConsole({
               </h2>
               <p className="text-xs text-slate-500 mt-1">
                 {t(
-                  'Client clinics can never permanently erase records or photos. Inspect soft-deleted patients, visits, fees, notes, photos, and disease guides here and restore them anytime.',
-                  'ক্লায়েন্টরা কোনো তথ্য স্থায়ীভাবে মুছতে পারে না। ক্লায়েন্টের মুছে ফেলা রোগী, ভিজিট, ফি, নোট, ছবি এবং রোগের তালিকা এখান থেকে স্ক্যান করে ফিরিয়ে আনুন।'
+                  'Clinics delete their own active records directly. Any previously archived or soft-deleted patients, visits, fees, notes, photos, and disease guides can still be scanned, restored, or purged here.',
+                  'ক্লিনিকগুলো এখন সরাসরি নিজেদের তথ্য মুছে ফেলতে পারে। আগে মুছে ব্যাকআপে রাখা কোনো রোগী, ভিজিট, ফি, নোট, ছবি বা রোগের তালিকা এখান থেকে স্ক্যান করে পুনরুদ্ধার বা স্থায়ীভাবে মুছতে পারবেন।'
                 )}
               </p>
             </div>
