@@ -77,6 +77,7 @@ import {
   buildDefaultPlatformConfig,
   buildPublicProfilePayload,
   buildSoftDeletePayload,
+  buildTenantAclPayload,
   DEFAULT_PLATFORM_CONFIG_ID,
   extractClinicSlugFromLocation,
   setActiveClinicHeaderId,
@@ -693,8 +694,9 @@ export default function App() {
     setDeletingRegistryPatientId(patient.id);
     setRegistryDeleteError(null);
     try {
-      const softDeleteNoUpdated = buildSoftDeletePayload(uid, false);
-      const softDeleteWithUpdated = buildSoftDeletePayload(uid, true);
+      const aclFields = buildTenantAclPayload(activeClinic, uid);
+      const softDeleteNoUpdated = { ...buildSoftDeletePayload(uid, false), ...aclFields };
+      const softDeleteWithUpdated = { ...buildSoftDeletePayload(uid, true), ...aclFields };
 
       const consSource = effectiveIsSuperAdmin
         ? tenantConsultationsCol(activeClinic.id, patient.id)

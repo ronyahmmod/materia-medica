@@ -26,6 +26,7 @@ import { deriveRulesFromDiseaseEntry } from '../lib/diseaseCatalog';
 import {
   ACCENT_THEME_PALETTES,
   buildSoftDeletePayload,
+  buildTenantAclPayload,
   tenantDiseaseRemediesCol,
   tenantDiseaseRemedyDoc,
 } from '../lib/tenantPaths';
@@ -192,19 +193,9 @@ export function DiseaseDatabaseView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      const accessEmails =
-        clinic.accessEmails && clinic.accessEmails.length > 0
-          ? clinic.accessEmails
-          : [clinic.ownerEmail.trim().toLowerCase()].filter(Boolean);
-      const accessUids =
-        clinic.authorizedUids && clinic.authorizedUids.length > 0
-          ? clinic.authorizedUids
-          : [uid];
-
       await updateDoc(tenantDiseaseRemedyDoc(clinic.id, entryId), {
         ...buildSoftDeletePayload(uid, true),
-        clinicAccessEmails: accessEmails,
-        clinicAccessUids: accessUids,
+        ...buildTenantAclPayload(clinic, uid),
       });
       setConfirmDeleteId(null);
     } catch (error) {

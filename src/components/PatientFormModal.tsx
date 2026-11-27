@@ -6,6 +6,7 @@ import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
 import {
   ACCENT_THEME_PALETTES,
+  buildTenantAclPayload,
   tenantPatientDoc,
   tenantPhotoDoc,
 } from '../lib/tenantPaths';
@@ -218,6 +219,7 @@ export function PatientFormModal({
         if (portraitPhotoId) basePayload.portraitPhotoId = portraitPhotoId;
         if (existingPatient.lastVisitDate) basePayload.lastVisitDate = existingPatient.lastVisitDate;
         if (existingPatient.lastRemedy) basePayload.lastRemedy = existingPatient.lastRemedy;
+        Object.assign(basePayload, buildTenantAclPayload(clinic, uid));
 
         await updateDoc(tenantPatientDoc(clinic.id, patientId), basePayload);
       } else {
@@ -251,6 +253,7 @@ export function PatientFormModal({
         portraitPhotoId = photoDocId;
 
         await updateDoc(tenantPatientDoc(clinic.id, patientId), {
+          ...buildTenantAclPayload(clinic, uid),
           portraitUrl,
           portraitPhotoId,
           updatedAt: serverTimestamp(),

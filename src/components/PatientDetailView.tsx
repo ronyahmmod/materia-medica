@@ -51,6 +51,7 @@ import {
 import {
   ACCENT_THEME_PALETTES,
   buildSoftDeletePayload,
+  buildTenantAclPayload,
   tenantConsultationDoc,
   tenantConsultationsCol,
   tenantFeeDoc,
@@ -371,6 +372,7 @@ export function PatientDetailView({
     setActionError(null);
     try {
       await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         status: newStatus,
         updatedAt: serverTimestamp(),
       });
@@ -418,6 +420,7 @@ export function PatientDetailView({
 
       if (uploadCategory === 'portrait') {
         await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
+          ...buildTenantAclPayload(clinic, uid),
           portraitUrl: uploaded.url,
           portraitPhotoId: photoDocId,
           updatedAt: serverTimestamp(),
@@ -443,12 +446,14 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(
-        tenantPhotoDoc(clinic.id, patient.id, photo.id),
-        buildSoftDeletePayload(uid, false)
-      );
+      const aclFields = buildTenantAclPayload(clinic, uid);
+      await updateDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id), {
+        ...buildSoftDeletePayload(uid, false),
+        ...aclFields,
+      });
       if (patient.portraitPhotoId === photo.id) {
         await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
+          ...aclFields,
           portraitUrl: '',
           portraitPhotoId: '',
           updatedAt: serverTimestamp(),
@@ -474,10 +479,10 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(
-        tenantConsultationDoc(clinic.id, patient.id, consultationId),
-        buildSoftDeletePayload(uid, true)
-      );
+      await updateDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId), {
+        ...buildSoftDeletePayload(uid, true),
+        ...buildTenantAclPayload(clinic, uid),
+      });
       setConfirmDeleteConsultationId(null);
     } catch (error) {
       const msg = reportFirestoreError(
@@ -553,6 +558,7 @@ export function PatientDetailView({
     const path = `clinics/${clinic.id}/patients/${patient.id}/clinical_notes/${note.id}`;
     try {
       await updateDoc(tenantNoteDoc(clinic.id, patient.id, note.id), {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         observedDate: editNoteDate.slice(0, 32),
         focusArea: editNoteFocus,
         content: trimmed.slice(0, FIELD_LIMITS.clinicalObservationMax),
@@ -570,10 +576,10 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(
-        tenantNoteDoc(clinic.id, patient.id, noteId),
-        buildSoftDeletePayload(uid, true)
-      );
+      await updateDoc(tenantNoteDoc(clinic.id, patient.id, noteId), {
+        ...buildSoftDeletePayload(uid, true),
+        ...buildTenantAclPayload(clinic, uid),
+      });
       setConfirmDeleteNoteId(null);
     } catch (error) {
       const msg = reportFirestoreError(
@@ -660,6 +666,7 @@ export function PatientDetailView({
     setSavingSettle(true);
     try {
       await updateDoc(tenantFeeDoc(clinic.id, rec.id), {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         cashPaid: newCashPaid,
         dueAmount: newDueAmount,
         updatedAt: serverTimestamp(),
@@ -683,7 +690,10 @@ export function PatientDetailView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
+      await updateDoc(tenantFeeDoc(clinic.id, feeId), {
+        ...buildSoftDeletePayload(uid, true),
+        ...buildTenantAclPayload(clinic, uid),
+      });
       setConfirmDeleteFeeId(null);
     } catch (error) {
       const msg = reportFirestoreError(
@@ -701,8 +711,9 @@ export function PatientDetailView({
     setDeletingPatient(true);
     setActionError(null);
     try {
-      const softDeleteNoUpdated = buildSoftDeletePayload(uid, false);
-      const softDeleteWithUpdated = buildSoftDeletePayload(uid, true);
+      const aclFields = buildTenantAclPayload(clinic, uid);
+      const softDeleteNoUpdated = { ...buildSoftDeletePayload(uid, false), ...aclFields };
+      const softDeleteWithUpdated = { ...buildSoftDeletePayload(uid, true), ...aclFields };
 
       for (const photo of photos) {
         await updateDoc(tenantPhotoDoc(clinic.id, patient.id, photo.id), softDeleteNoUpdated);
@@ -839,6 +850,7 @@ export function PatientDetailView({
     setActionError(null);
     try {
       const updates: Record<string, unknown> = {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         nextFollowUpDate: cleanDate,
         updatedAt: serverTimestamp(),
       };
@@ -864,6 +876,7 @@ export function PatientDetailView({
     setActionError(null);
     try {
       await updateDoc(tenantPatientDoc(clinic.id, patient.id), {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         nextFollowUpDate: '',
         updatedAt: serverTimestamp(),
       });

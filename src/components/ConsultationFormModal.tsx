@@ -16,6 +16,7 @@ import { compressClinicalImage, formatBytes } from '../lib/imageCompressor';
 import { uploadClinicalPhoto } from '../lib/photoApi';
 import {
   ACCENT_THEME_PALETTES,
+  buildTenantAclPayload,
   tenantConsultationDoc,
   tenantDiseaseRemediesCol,
   tenantFeeDoc,
@@ -632,6 +633,7 @@ export function ConsultationFormModal({
       await setDoc(tenantConsultationDoc(clinic.id, patient.id, consultationId), payload);
 
       const patientUpdate: Record<string, unknown> = {
+        ...buildTenantAclPayload(clinic, uid),
         status: nextFollowUpDate ? 'follow-up' : 'active',
         lastVisitDate: visitDate,
         lastRemedy: summaryLastRemedy,

@@ -313,6 +313,31 @@ export function buildSoftDeletePayload(
   return payload;
 }
 
+export function buildTenantAclPayload(
+  clinic: Pick<ClinicTenant, 'id' | 'accessEmails' | 'authorizedUids' | 'ownerEmail'>,
+  fallbackUid?: string
+): {
+  clinicId: string;
+  clinicAccessEmails: string[];
+  clinicAccessUids: string[];
+} {
+  const clinicAccessEmails =
+    clinic.accessEmails && clinic.accessEmails.length > 0
+      ? clinic.accessEmails
+      : [clinic.ownerEmail.trim().toLowerCase()].filter(Boolean);
+  const clinicAccessUids =
+    clinic.authorizedUids && clinic.authorizedUids.length > 0
+      ? clinic.authorizedUids
+      : fallbackUid
+        ? [fallbackUid]
+        : [];
+  return {
+    clinicId: clinic.id,
+    clinicAccessEmails,
+    clinicAccessUids,
+  };
+}
+
 export function buildDefaultPlatformConfig(uid: string): Omit<PlatformHostingConfig, 'id' | 'updatedAt'> & { updatedAt: ReturnType<typeof serverTimestamp> } {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const publicOrigin = isPrivateDevPreviewUrl(origin) ? '' : origin;

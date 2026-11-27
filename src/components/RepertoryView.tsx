@@ -36,6 +36,7 @@ import {
 import {
   ACCENT_THEME_PALETTES,
   buildSoftDeletePayload,
+  buildTenantAclPayload,
   tenantRepertoryCol,
   tenantRepertoryDoc,
 } from '../lib/tenantPaths';
@@ -943,6 +944,7 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
       }
 
       if (editingEntry) {
+        Object.assign(payload, buildTenantAclPayload(clinic, uid));
         await updateDoc(tenantRepertoryDoc(clinic.id, entryId), payload);
       } else {
         payload.clinicId = clinic.id;
@@ -970,7 +972,10 @@ export function RepertoryView({ clinic, isSuperAdmin }: RepertoryViewProps) {
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantRepertoryDoc(clinic.id, entryId), buildSoftDeletePayload(uid, true));
+      await updateDoc(tenantRepertoryDoc(clinic.id, entryId), {
+        ...buildSoftDeletePayload(uid, true),
+        ...buildTenantAclPayload(clinic, uid),
+      });
       setConfirmDeleteId(null);
     } catch (error) {
       reportFirestoreError(

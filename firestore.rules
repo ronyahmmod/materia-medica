@@ -100,6 +100,21 @@ service cloud.firestore {
       );
     }
 
+    function isTenantClinicIdValidOnUpdate(clinicId, inc, ex) {
+      return inc.clinicId == clinicId
+        || ('clinicId' in ex && ex.clinicId is string && ex.clinicId.size() >= 1 && inc.clinicId == ex.clinicId);
+    }
+
+    function isTenantAclUnchangedOrSynced(clinicId, inc, ex) {
+      return (
+        (inc.clinicAccessEmails == clinicDoc(clinicId).data.accessEmails)
+        || ('clinicAccessEmails' in ex && inc.clinicAccessEmails == ex.clinicAccessEmails)
+      ) && (
+        (inc.clinicAccessUids == clinicDoc(clinicId).data.authorizedUids)
+        || ('clinicAccessUids' in ex && inc.clinicAccessUids == ex.clinicAccessUids)
+      );
+    }
+
     function isValidEmailList(listVal) {
       return listVal is list
         && listVal.size() >= 1
@@ -654,18 +669,17 @@ service cloud.firestore {
           && isValidId(patientId)
           && isClinicWritable(clinicId)
           && isValidPatientBase(incoming(), true)
-          && incoming().clinicId == existing().clinicId
+          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
             isPrimaryAdmin()
             || (
-              incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-              && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicAccessEmails', 'clinicAccessUids',
+                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                 'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
                 'caseNumber', 'fullName', 'age', 'gender', 'phone',
                 'email', 'address', 'chiefComplaint', 'thermalState',
@@ -709,18 +723,17 @@ service cloud.firestore {
             && isClinicWritable(clinicId)
             && isValidConsultationBase(incoming(), patientId, true)
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == existing().clinicId
+            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
             && incoming().createdBy == existing().createdBy
             && incoming().createdAt == existing().createdAt
             && incoming().updatedAt == request.time
             && (
               isPrimaryAdmin()
               || (
-                incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-                && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicAccessEmails', 'clinicAccessUids',
+                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                   'visitDate', 'diseaseName', 'presentingSymptoms', 'mentalGenerals', 'physicalGenerals',
                   'modalitiesWorse', 'modalitiesBetter',
                   'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
@@ -766,17 +779,16 @@ service cloud.firestore {
             && isClinicWritable(clinicId)
             && isValidPatientPhotoBase(incoming(), patientId, true)
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == existing().clinicId
+            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
             && incoming().uploadedBy == existing().uploadedBy
             && incoming().createdAt == existing().createdAt
             && (
               isPrimaryAdmin()
               || (
-                incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-                && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicAccessEmails', 'clinicAccessUids',
+                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                   'caption', 'category', 'consultationId',
                   'isDeleted', 'deletedAt', 'deletedBy'
                 ])
@@ -818,18 +830,17 @@ service cloud.firestore {
             && isClinicWritable(clinicId)
             && isValidClinicalNoteBase(incoming(), patientId, true)
             && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == existing().clinicId
+            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
             && incoming().createdBy == existing().createdBy
             && incoming().createdAt == existing().createdAt
             && incoming().updatedAt == request.time
             && (
               isPrimaryAdmin()
               || (
-                incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-                && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
                 && isClientSoftDeleteStateValid(incoming(), existing())
                 && incoming().diff(existing()).affectedKeys().hasOnly([
-                  'clinicAccessEmails', 'clinicAccessUids',
+                  'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                   'observedDate', 'focusArea', 'content',
                   'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
                 ])
@@ -870,7 +881,7 @@ service cloud.firestore {
           && isClinicWritable(clinicId)
           && isValidFeeRecordBase(incoming(), true)
           && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(incoming().patientId))
-          && incoming().clinicId == existing().clinicId
+          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
           && incoming().patientId == existing().patientId
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
@@ -878,11 +889,10 @@ service cloud.firestore {
           && (
             isPrimaryAdmin()
             || (
-              incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-              && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicAccessEmails', 'clinicAccessUids',
+                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                 'patientName', 'caseNumber', 'collectedDate', 'feeType',
                 'feeAmount', 'discountAmount', 'netAmount', 'cashPaid', 'dueAmount',
                 'notes', 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
@@ -920,18 +930,17 @@ service cloud.firestore {
           && isValidId(entryId)
           && isClinicWritable(clinicId)
           && isValidRepertoryEntryBase(incoming(), true)
-          && incoming().clinicId == existing().clinicId
+          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
             isPrimaryAdmin()
             || (
-              incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-              && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
-                'clinicAccessEmails', 'clinicAccessUids',
+                'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
                 'chapter', 'rubric', 'primaryRemedy', 'remedies',
                 'modalities', 'symptomNotes',
                 'isDeleted', 'deletedAt', 'deletedBy', 'updatedAt'
@@ -969,18 +978,14 @@ service cloud.firestore {
           && isValidId(entryId)
           && isClinicWritable(clinicId)
           && isValidDiseaseRemedyEntryBase(incoming(), true)
-          && (
-            ('clinicId' in existing() && existing().clinicId is string && existing().clinicId.size() >= 1 && incoming().clinicId == existing().clinicId)
-            || ((!('clinicId' in existing()) || !(existing().clinicId is string) || existing().clinicId.size() == 0) && incoming().clinicId == clinicId)
-          )
+          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
           && incoming().createdBy == existing().createdBy
           && incoming().createdAt == existing().createdAt
           && incoming().updatedAt == request.time
           && (
             isPrimaryAdmin()
             || (
-              incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-              && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
+              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
               && isClientSoftDeleteStateValid(incoming(), existing())
               && incoming().diff(existing()).affectedKeys().hasOnly([
                 'clinicId', 'clinicAccessEmails', 'clinicAccessUids',

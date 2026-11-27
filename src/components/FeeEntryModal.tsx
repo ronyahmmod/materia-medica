@@ -5,7 +5,7 @@ import { auth, OperationType, reportFirestoreError } from '../firebase';
 import { useLanguage } from '../i18n/LanguageContext';
 import { FEE_CATEGORY_LABELS_I18N } from '../i18n/translations';
 import { computeFeeBreakdown, formatCashAmount } from '../lib/feeCalculations';
-import { ACCENT_THEME_PALETTES, tenantFeeDoc } from '../lib/tenantPaths';
+import { ACCENT_THEME_PALETTES, buildTenantAclPayload, tenantFeeDoc } from '../lib/tenantPaths';
 import {
   FEE_CATEGORIES,
   FIELD_LIMITS,
@@ -173,6 +173,7 @@ export function FeeEntryModal({
     try {
       if (existingFee) {
         const updatePayload: Record<string, unknown> = {
+          ...buildTenantAclPayload(clinic, uid),
           patientName: selectedPatient.fullName.slice(0, FIELD_LIMITS.fullNameMax),
           caseNumber: selectedPatient.caseNumber.slice(0, FIELD_LIMITS.caseNumberMax),
           collectedDate: collectedDate.slice(0, 32),

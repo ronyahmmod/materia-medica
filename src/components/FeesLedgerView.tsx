@@ -18,7 +18,12 @@ import {
   roundAmount,
   summarizeFees,
 } from '../lib/feeCalculations';
-import { ACCENT_THEME_PALETTES, buildSoftDeletePayload, tenantFeeDoc } from '../lib/tenantPaths';
+import {
+  ACCENT_THEME_PALETTES,
+  buildSoftDeletePayload,
+  buildTenantAclPayload,
+  tenantFeeDoc,
+} from '../lib/tenantPaths';
 import type { ClinicTenant, FeeRecord, Patient } from '../types/clinic';
 import { FeeEntryModal } from './FeeEntryModal';
 
@@ -136,6 +141,7 @@ export function FeesLedgerView({
     setSavingSettle(true);
     try {
       await updateDoc(tenantFeeDoc(clinic.id, rec.id), {
+        ...buildTenantAclPayload(clinic, auth.currentUser?.uid),
         cashPaid: newCashPaid,
         dueAmount: newDueAmount,
         updatedAt: serverTimestamp(),
@@ -161,7 +167,10 @@ export function FeesLedgerView({
     const uid = auth.currentUser?.uid;
     if (!uid) return;
     try {
-      await updateDoc(tenantFeeDoc(clinic.id, feeId), buildSoftDeletePayload(uid, true));
+      await updateDoc(tenantFeeDoc(clinic.id, feeId), {
+        ...buildSoftDeletePayload(uid, true),
+        ...buildTenantAclPayload(clinic, uid),
+      });
       setConfirmDeleteId(null);
     } catch (error) {
       const msg = reportFirestoreError(
