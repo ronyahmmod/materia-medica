@@ -8,23 +8,6 @@ service cloud.firestore {
       allow read, write: if false;
     }
 
-    // Core Helpers
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function isValidSlug(slug) {
-      return slug is string && slug.size() >= 2 && slug.size() <= 64 && slug.matches('^[a-z0-9-]+$');
-    }
-
-    function incoming() {
-      return request.resource.data;
-    }
-
-    function existing() {
-      return resource.data;
-    }
-
     function isSignedIn() {
       return request.auth != null;
     }
@@ -42,19 +25,13 @@ service cloud.firestore {
         && userEmailLower() == 'rony.jib@gmail.com';
     }
 
-    // Client Users: Strictly password provider (Google login disabled for clients)
-    function isClientPasswordUser() {
-      return isSignedIn()
-        && request.auth.token.email != null
-        && request.auth.token.firebase.sign_in_provider == 'password';
-    }
-
     function clinicDoc(clinicId) {
       return get(/databases/$(database)/documents/clinics/$(clinicId));
     }
 
     function isClinicMember(clinicId) {
-      return isClientPasswordUser()
+      return isSignedIn()
+        && request.auth.token.email != null
         && exists(/databases/$(database)/documents/clinics/$(clinicId))
         && request.auth.uid in clinicDoc(clinicId).data.authorizedUids
         && (
@@ -73,1036 +50,114 @@ service cloud.firestore {
       return isPrimaryAdmin() || isClinicActiveMember(clinicId);
     }
 
-    function isOptionalString(data, key, maxLen) {
-      return !(key in data) || (data[key] is string && data[key].size() <= maxLen);
-    }
-
-    function isValidSoftDeleteFields(data) {
-      return (!('isDeleted' in data) || data.isDeleted is bool)
-        && isOptionalString(data, 'deletedAt', 40)
-        && isOptionalString(data, 'deletedBy', 128)
-        && isOptionalString(data, 'restoredAt', 40);
-    }
-
-    function isNotCreatingDeleted(data) {
-      return !('isDeleted' in data) || data.isDeleted == false;
-    }
-
-    // Clients perform direct hard-deletes and cannot mutate soft-delete/restore flags; only Super Admin can restore historical soft-deleted records
-    function isClientSoftDeleteStateValid(inc, ex) {
-      return isNotCreatingDeleted(ex)
-        && isNotCreatingDeleted(inc)
-        && isFieldUnchanged(inc, ex, 'deletedAt')
-        && isFieldUnchanged(inc, ex, 'deletedBy')
-        && isFieldUnchanged(inc, ex, 'restoredAt');
-    }
-
-    function isFieldUnchanged(inc, ex, key) {
-      return (!(key in ex) && !(key in inc))
-        || (key in ex && key in inc && inc[key] == ex[key]);
-    }
-
-    function isTenantClinicIdValidOnUpdate(clinicId, inc, ex) {
-      return inc.clinicId == clinicId
-        || ('clinicId' in ex && ex.clinicId is string && ex.clinicId.size() >= 1 && inc.clinicId == ex.clinicId);
-    }
-
-    function isTenantAclUnchangedOrSynced(clinicId, inc, ex) {
-      return (
-        (inc.clinicAccessEmails == clinicDoc(clinicId).data.accessEmails)
-        || ('clinicAccessEmails' in ex && inc.clinicAccessEmails == ex.clinicAccessEmails)
-      ) && (
-        (inc.clinicAccessUids == clinicDoc(clinicId).data.authorizedUids)
-        || ('clinicAccessUids' in ex && inc.clinicAccessUids == ex.clinicAccessUids)
-      );
-    }
-
-    function isValidEmailList(listVal) {
-      return listVal is list
-        && listVal.size() >= 1
-        && listVal.size() <= 10
-        && listVal[0] is string
-        && listVal[0].size() >= 3
-        && listVal[0].size() <= 160;
-    }
-
-    function isValidUidList(listVal) {
-      return listVal is list
-        && listVal.size() >= 1
-        && listVal.size() <= 10
-        && isValidId(listVal[0]);
-    }
-
-    // Validation Blueprint: ClinicTenant
-    function isValidClinicTenant(data) {
-      return data.keys().hasAll([
-          'slug', 'clinicName', 'practitionerName', 'ownerEmail',
-          'accessEmails', 'authorizedUids',
-          'currencySymbol', 'accentColor', 'planTier', 'subscriptionStatus',
-          'patientLimit', 'storageLimitMb', 'monthlyFeeAmount', 'billingCycle',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'slug', 'clinicName', 'practitionerName', 'ownerEmail',
-          'accessEmails', 'authorizedUids',
-          'tagline', 'phone', 'address', 'currencySymbol', 'accentColor',
-          'planTier', 'subscriptionStatus', 'patientLimit', 'storageLimitMb',
-          'hostingProvider', 'monthlyFeeAmount', 'billingCycle', 'subscriptionNotes',
-          'lastActiveAt', 'lastActiveEmail',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && isValidSlug(data.slug)
-        && data.clinicName is string && data.clinicName.size() >= 1 && data.clinicName.size() <= 160
-        && data.practitionerName is string && data.practitionerName.size() >= 1 && data.practitionerName.size() <= 120
-        && data.ownerEmail is string && data.ownerEmail.size() >= 3 && data.ownerEmail.size() <= 160
-        && isValidEmailList(data.accessEmails)
-        && isValidUidList(data.authorizedUids)
-        && isOptionalString(data, 'tagline', 240)
-        && isOptionalString(data, 'phone', 40)
-        && isOptionalString(data, 'address', 300)
-        && data.currencySymbol is string && data.currencySymbol in ['৳', '$', '₹', '€', '£']
-        && data.accentColor is string && data.accentColor in ['teal', 'indigo', 'emerald', 'slate']
-        && data.planTier is string && data.planTier in ['free', 'growth', 'clinic_pro']
-        && data.subscriptionStatus is string && data.subscriptionStatus in ['active', 'trial', 'suspended']
-        && data.patientLimit is number && data.patientLimit >= 1 && data.patientLimit <= 100000
-        && data.storageLimitMb is number && data.storageLimitMb >= 1 && data.storageLimitMb <= 100000
-        && isOptionalString(data, 'hostingProvider', 120)
-        && data.monthlyFeeAmount is number && data.monthlyFeeAmount >= 0 && data.monthlyFeeAmount <= 100000
-        && data.billingCycle is string && data.billingCycle in ['free', 'monthly', 'yearly']
-        && isOptionalString(data, 'subscriptionNotes', 500)
-        && (!('lastActiveAt' in data) || data.lastActiveAt is timestamp)
-        && isOptionalString(data, 'lastActiveEmail', 160)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: ClinicPublicProfile (Zero PII)
-    function isValidClinicPublicProfile(data, slug) {
-      return data.keys().hasAll([
-          'clinicId', 'slug', 'clinicName', 'practitionerName',
-          'accentColor', 'planTier', 'subscriptionStatus', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'slug', 'clinicName', 'practitionerName',
-          'tagline', 'accentColor', 'planTier', 'subscriptionStatus', 'updatedAt'
-        ])
-        && isValidId(data.clinicId)
-        && isValidSlug(data.slug) && data.slug == slug
-        && data.clinicName is string && data.clinicName.size() >= 1 && data.clinicName.size() <= 160
-        && data.practitionerName is string && data.practitionerName.size() >= 1 && data.practitionerName.size() <= 120
-        && isOptionalString(data, 'tagline', 240)
-        && data.accentColor is string && data.accentColor in ['teal', 'indigo', 'emerald', 'slate']
-        && data.planTier is string && data.planTier in ['free', 'growth', 'clinic_pro']
-        && data.subscriptionStatus is string && data.subscriptionStatus in ['active', 'trial', 'suspended']
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: PlatformHostingConfig
-    function isValidPlatformHostingConfig(data) {
-      return data.keys().hasAll([
-          'platformName', 'supportEmail', 'defaultHostingProvider',
-          'defaultRegion', 'updatedBy', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'platformName', 'supportEmail', 'defaultHostingProvider',
-          'defaultRegion', 'publicBaseUrl', 'freeTierSummary',
-          'maintenanceNotice', 'updatedBy', 'updatedAt'
-        ])
-        && data.platformName is string && data.platformName.size() >= 1 && data.platformName.size() <= 120
-        && data.supportEmail is string && data.supportEmail.size() >= 3 && data.supportEmail.size() <= 160
-        && data.defaultHostingProvider is string && data.defaultHostingProvider.size() >= 1 && data.defaultHostingProvider.size() <= 120
-        && data.defaultRegion is string && data.defaultRegion.size() >= 1 && data.defaultRegion.size() <= 80
-        && isOptionalString(data, 'publicBaseUrl', 300)
-        && isOptionalString(data, 'freeTierSummary', 500)
-        && isOptionalString(data, 'maintenanceNotice', 400)
-        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: Patient (supports Human & Veterinary + Soft Delete)
-    function isValidPatientBase(data, requireTenantFields) {
-      return data.keys().hasAll([
-          'caseNumber', 'fullName', 'age', 'gender', 'phone',
-          'chiefComplaint', 'status', 'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientType', 'animalSpeciesOrBreed', 'ownerOrGuardianName',
-          'caseNumber', 'fullName', 'age', 'gender', 'phone',
-          'email', 'address', 'chiefComplaint', 'thermalState',
-          'constitutionNotes', 'allergies', 'portraitUrl', 'portraitPhotoId',
-          'status', 'lastVisitDate', 'nextFollowUpDate', 'lastRemedy',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && (!('patientType' in data) || (data.patientType is string && data.patientType in ['Human', 'Cow', 'Goat', 'Other Animal']))
-        && isOptionalString(data, 'animalSpeciesOrBreed', 120)
-        && isOptionalString(data, 'ownerOrGuardianName', 120)
-        && data.caseNumber is string && data.caseNumber.size() >= 1 && data.caseNumber.size() <= 32 && data.caseNumber.matches('^[a-zA-Z0-9_\\-]+$')
-        && data.fullName is string && data.fullName.size() >= 1 && data.fullName.size() <= 120
-        && data.age is number && data.age >= 0 && data.age <= 130
-        && data.gender is string && data.gender in ['Female', 'Male', 'Other']
-        && data.phone is string && data.phone.size() >= 3 && data.phone.size() <= 32
-        && isOptionalString(data, 'email', 160)
-        && isOptionalString(data, 'address', 300)
-        && data.chiefComplaint is string && data.chiefComplaint.size() >= 1 && data.chiefComplaint.size() <= 500
-        && (!('thermalState' in data) || (data.thermalState is string && data.thermalState in ['Chilly', 'Hot', 'Ambithermal', 'Unspecified']))
-        && isOptionalString(data, 'constitutionNotes', 2000)
-        && isOptionalString(data, 'allergies', 500)
-        && isOptionalString(data, 'portraitUrl', 300)
-        && isOptionalString(data, 'portraitPhotoId', 128)
-        && data.status is string && data.status in ['active', 'follow-up', 'archived']
-        && isOptionalString(data, 'lastVisitDate', 32)
-        && isOptionalString(data, 'nextFollowUpDate', 32)
-        && isOptionalString(data, 'lastRemedy', 160)
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: Consultation (supports Morning/Afternoon remedies & Soft Delete)
-    function isValidConsultationBase(data, patientId, requireTenantFields) {
-      return data.keys().hasAll([
-          'patientId', 'visitDate', 'presentingSymptoms',
-          'remedyName', 'dosage',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientId', 'visitDate', 'diseaseName', 'presentingSymptoms',
-          'mentalGenerals', 'physicalGenerals', 'modalitiesWorse', 'modalitiesBetter',
-          'firstRemedyMorning', 'firstRemedyCompanion', 'firstRemedyPotency',
-          'secondRemedyAfternoon', 'secondRemedyCompanion', 'secondRemedyPotency',
-          'globulesDose', 'ounceAmount', 'phialCount', 'extraPotency', 'biochemicMedicine',
-          'remedyName', 'potency', 'dosage', 'clinicalNotes', 'nextFollowUpDate',
-          'photoIds', 'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && data.patientId is string && data.patientId == patientId
-        && data.visitDate is string && data.visitDate.size() >= 4 && data.visitDate.size() <= 32
-        && isOptionalString(data, 'diseaseName', 160)
-        && data.presentingSymptoms is string && data.presentingSymptoms.size() >= 1 && data.presentingSymptoms.size() <= 2000
-        && isOptionalString(data, 'mentalGenerals', 1500)
-        && isOptionalString(data, 'physicalGenerals', 1500)
-        && isOptionalString(data, 'modalitiesWorse', 500)
-        && isOptionalString(data, 'modalitiesBetter', 500)
-        && isOptionalString(data, 'firstRemedyMorning', 160)
-        && isOptionalString(data, 'firstRemedyCompanion', 160)
-        && isOptionalString(data, 'firstRemedyPotency', 32)
-        && isOptionalString(data, 'secondRemedyAfternoon', 160)
-        && isOptionalString(data, 'secondRemedyCompanion', 160)
-        && isOptionalString(data, 'secondRemedyPotency', 32)
-        && isOptionalString(data, 'globulesDose', 40)
-        && isOptionalString(data, 'ounceAmount', 40)
-        && isOptionalString(data, 'phialCount', 40)
-        && isOptionalString(data, 'extraPotency', 32)
-        && isOptionalString(data, 'biochemicMedicine', 160)
-        && data.remedyName is string && data.remedyName.size() >= 1 && data.remedyName.size() <= 160
-        && isOptionalString(data, 'potency', 32)
-        && data.dosage is string && data.dosage.size() >= 1 && data.dosage.size() <= 200
-        && isOptionalString(data, 'clinicalNotes', 2000)
-        && isOptionalString(data, 'nextFollowUpDate', 32)
-        && (!('photoIds' in data) || (
-          data.photoIds is list
-          && data.photoIds.size() <= 10
-          && (data.photoIds.size() == 0 || data.photoIds[0] is string)
-        ))
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: PatientPhoto
-    function isValidPatientPhotoBase(data, patientId, requireTenantFields) {
-      return data.keys().hasAll([
-          'patientId', 'fileName', 'url', 'mimeType', 'sizeBytes',
-          'category', 'uploadedBy', 'createdAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientId', 'fileName', 'url', 'mimeType', 'sizeBytes',
-          'category', 'caption', 'consultationId',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'uploadedBy', 'createdAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && data.patientId is string && data.patientId == patientId
-        && data.fileName is string && data.fileName.size() >= 1 && data.fileName.size() <= 160
-        && data.url is string && data.url.size() >= 1 && data.url.size() <= 300
-        && data.mimeType is string && data.mimeType in ['image/webp', 'image/jpeg', 'image/png']
-        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 2097152
-        && data.category is string && data.category in ['portrait', 'symptom', 'tongue', 'skin', 'prescription']
-        && isOptionalString(data, 'caption', 300)
-        && isOptionalString(data, 'consultationId', 128)
-        && isValidSoftDeleteFields(data)
-        && data.uploadedBy is string && data.uploadedBy.size() >= 1 && data.uploadedBy.size() <= 128
-        && data.createdAt is timestamp;
-    }
-
-    // Validation Blueprint: ClinicalNote
-    function isValidClinicalNoteBase(data, patientId, requireTenantFields) {
-      return data.keys().hasAll([
-          'patientId', 'observedDate', 'focusArea', 'content',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientId', 'observedDate', 'focusArea', 'content',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && data.patientId is string && data.patientId == patientId
-        && data.observedDate is string && data.observedDate.size() >= 4 && data.observedDate.size() <= 32
-        && data.focusArea is string
-        && data.focusArea in ['Constitution', 'Mental State', 'Miasm & History', 'General Observation']
-        && data.content is string && data.content.size() >= 1 && data.content.size() <= 4000
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: RepertoryEntry
-    function isValidRepertoryEntryBase(data, requireTenantFields) {
-      return data.keys().hasAll([
-          'chapter', 'rubric', 'primaryRemedy', 'remedies',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'chapter', 'rubric', 'primaryRemedy', 'remedies',
-          'modalities', 'symptomNotes',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && data.chapter is string
-        && data.chapter in [
-          'Mind', 'Head & Vertigo', 'Respiratory', 'Gastrointestinal',
-          'Skin', 'Musculoskeletal', 'Sleep & Dreams', 'Generalities'
-        ]
-        && data.rubric is string && data.rubric.size() >= 1 && data.rubric.size() <= 240
-        && data.primaryRemedy is string && data.primaryRemedy.size() >= 1 && data.primaryRemedy.size() <= 160
-        && data.remedies is list
-        && data.remedies.size() >= 1
-        && data.remedies.size() <= 20
-        && data.remedies[0] is string
-        && isOptionalString(data, 'modalities', 500)
-        && isOptionalString(data, 'symptomNotes', 1500)
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: DiseaseRemedyEntry
-    function isValidDiseaseRemedyEntryBase(data, requireTenantFields) {
-      return data.keys().hasAll([
-          'patientScope', 'diseaseName', 'symptoms',
-          'firstRemedyMorning',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientScope', 'diseaseName', 'symptoms', 'symptomRules',
-          'firstRemedyMorning', 'firstRemedyPotency',
-          'secondRemedyAfternoon', 'secondRemedyPotency',
-          'dosageInstructions', 'clinicalNotes',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && data.patientScope is string && data.patientScope in ['All', 'Human', 'Veterinary']
-        && data.diseaseName is string && data.diseaseName.size() >= 1 && data.diseaseName.size() <= 160
-        && data.symptoms is string && data.symptoms.size() >= 1 && data.symptoms.size() <= 2000
-        && (!('symptomRules' in data) || (
-          data.symptomRules is list
-          && data.symptomRules.size() <= 50
-          && (
-            data.symptomRules.size() == 0
-            || (
-              data.symptomRules[0] is map
-              && data.symptomRules[0].keys().hasAll(['id', 'symptom', 'remedyName', 'timing'])
-              && data.symptomRules[0].keys().hasOnly(['id', 'symptom', 'remedyName', 'potency', 'doseOrUnit', 'timing', 'notes'])
-              && data.symptomRules[0].id is string && data.symptomRules[0].id.size() >= 1 && data.symptomRules[0].id.size() <= 64
-              && data.symptomRules[0].symptom is string && data.symptomRules[0].symptom.size() >= 1 && data.symptomRules[0].symptom.size() <= 500
-              && data.symptomRules[0].remedyName is string && data.symptomRules[0].remedyName.size() >= 1 && data.symptomRules[0].remedyName.size() <= 160
-              && isOptionalString(data.symptomRules[0], 'potency', 32)
-              && isOptionalString(data.symptomRules[0], 'doseOrUnit', 64)
-              && data.symptomRules[0].timing is string && data.symptomRules[0].timing in ['general', 'morning', 'afternoon', 'companion-morning', 'companion-afternoon', 'biochemic']
-              && isOptionalString(data.symptomRules[0], 'notes', 300)
-            )
-          )
-        ))
-        && data.firstRemedyMorning is string && data.firstRemedyMorning.size() >= 1 && data.firstRemedyMorning.size() <= 160
-        && isOptionalString(data, 'firstRemedyPotency', 32)
-        && isOptionalString(data, 'secondRemedyAfternoon', 160)
-        && isOptionalString(data, 'secondRemedyPotency', 32)
-        && isOptionalString(data, 'dosageInstructions', 200)
-        && isOptionalString(data, 'clinicalNotes', 1500)
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Validation Blueprint: FeeRecord (Cash-only accounting & mathematical invariants)
-    function isValidFeeRecordBase(data, requireTenantFields) {
-      return data.keys().hasAll([
-          'patientId', 'patientName', 'caseNumber', 'collectedDate', 'feeType',
-          'feeAmount', 'discountAmount', 'netAmount', 'cashPaid', 'dueAmount',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicId', 'clinicAccessEmails', 'clinicAccessUids',
-          'patientId', 'patientName', 'caseNumber', 'consultationId',
-          'collectedDate', 'feeType', 'feeAmount', 'discountAmount',
-          'netAmount', 'cashPaid', 'dueAmount', 'notes',
-          'isDeleted', 'deletedAt', 'deletedBy', 'restoredAt',
-          'createdBy', 'createdAt', 'updatedAt'
-        ])
-        && (!requireTenantFields || ('clinicId' in data && 'clinicAccessEmails' in data && 'clinicAccessUids' in data))
-        && isOptionalString(data, 'clinicId', 128)
-        && (!('clinicAccessEmails' in data) || isValidEmailList(data.clinicAccessEmails))
-        && (!('clinicAccessUids' in data) || isValidUidList(data.clinicAccessUids))
-        && isValidId(data.patientId)
-        && data.patientName is string && data.patientName.size() >= 1 && data.patientName.size() <= 120
-        && data.caseNumber is string && data.caseNumber.size() >= 1 && data.caseNumber.size() <= 32 && data.caseNumber.matches('^[a-zA-Z0-9_\\-]+$')
-        && isOptionalString(data, 'consultationId', 128)
-        && data.collectedDate is string && data.collectedDate.size() >= 4 && data.collectedDate.size() <= 32
-        && data.feeType is string
-        && data.feeType in ['consultation', 'medicine', 'follow-up', 'due-settlement', 'other']
-        && data.feeAmount is number && data.feeAmount > 0 && data.feeAmount <= 1000000
-        && data.discountAmount is number && data.discountAmount >= 0 && data.discountAmount <= data.feeAmount
-        && data.netAmount is number && data.netAmount >= 0
-        && data.netAmount >= (data.feeAmount - data.discountAmount) - 0.01
-        && data.netAmount <= (data.feeAmount - data.discountAmount) + 0.01
-        && data.cashPaid is number && data.cashPaid >= 0 && data.cashPaid <= data.netAmount
-        && data.dueAmount is number && data.dueAmount >= 0
-        && data.dueAmount >= (data.netAmount - data.cashPaid) - 0.01
-        && data.dueAmount <= (data.netAmount - data.cashPaid) + 0.01
-        && isOptionalString(data, 'notes', 500)
-        && isValidSoftDeleteFields(data)
-        && data.createdBy is string && data.createdBy.size() >= 1 && data.createdBy.size() <= 128
-        && data.createdAt is timestamp
-        && data.updatedAt is timestamp;
-    }
-
-    // Legacy Validation Helpers
-    function isValidClinicSettings(data) {
-      return data.keys().hasAll([
-          'clinicName', 'practitionerName', 'planTier',
-          'patientLimit', 'storageLimitMb', 'updatedBy', 'updatedAt'
-        ])
-        && data.keys().hasOnly([
-          'clinicName', 'practitionerName', 'planTier',
-          'patientLimit', 'storageLimitMb', 'hostingProvider',
-          'notes', 'updatedBy', 'updatedAt'
-        ])
-        && data.clinicName is string && data.clinicName.size() >= 1 && data.clinicName.size() <= 160
-        && data.practitionerName is string && data.practitionerName.size() >= 1 && data.practitionerName.size() <= 120
-        && data.planTier is string && data.planTier in ['free', 'growth', 'clinic_pro']
-        && data.patientLimit is number && data.patientLimit > 0 && data.patientLimit <= 100000
-        && data.storageLimitMb is number && data.storageLimitMb > 0 && data.storageLimitMb <= 100000
-        && isOptionalString(data, 'hostingProvider', 120)
-        && isOptionalString(data, 'notes', 500)
-        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128
-        && data.updatedAt is timestamp;
-    }
-
-    function isValidAdminUser(data) {
-      return data.keys().hasAll(['email', 'name', 'role', 'createdAt'])
-        && data.keys().hasOnly(['email', 'name', 'role', 'createdAt'])
-        && data.email is string && data.email.size() >= 3 && data.email.size() <= 160
-        && data.name is string && data.name.size() >= 1 && data.name.size() <= 120
-        && data.role is string && data.role in ['owner', 'practitioner']
-        && data.createdAt is timestamp;
-    }
-
-    // -----------------------------------------------------------------------
-    // 1. SaaS Platform Hosting Configuration (Super Admin Managed)
-    // -----------------------------------------------------------------------
+    // 1. SaaS Platform Hosting Configuration (Super Admin writes; signed-in users may read)
     match /platform_config/{configId} {
       allow list: if isPrimaryAdmin();
-      allow get: if isValidId(configId) && (isPrimaryAdmin() || isClientPasswordUser());
-
-      allow create: if isValidId(configId)
-        && isPrimaryAdmin()
-        && isValidPlatformHostingConfig(incoming())
-        && incoming().updatedBy == request.auth.uid
-        && incoming().updatedAt == request.time;
-
-      allow update: if isValidId(configId)
-        && isPrimaryAdmin()
-        && isValidPlatformHostingConfig(incoming())
-        && incoming().updatedBy == request.auth.uid
-        && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly([
-          'platformName', 'supportEmail', 'defaultHostingProvider',
-          'defaultRegion', 'publicBaseUrl', 'freeTierSummary',
-          'maintenanceNotice', 'updatedBy', 'updatedAt'
-        ]);
-
-      allow delete: if isValidId(configId) && isPrimaryAdmin();
+      allow get: if isSignedIn();
+      allow create, update, delete: if isPrimaryAdmin();
     }
 
-    // -----------------------------------------------------------------------
     // 2. Non-PII Public White-Label Branding Storefront (Keyed by URL Slug)
-    // -----------------------------------------------------------------------
     match /clinic_public/{slug} {
-      allow get: if isValidSlug(slug);
-      allow list: if isPrimaryAdmin();
-
-      allow create: if isValidSlug(slug)
-        && isPrimaryAdmin()
-        && isValidClinicPublicProfile(incoming(), slug)
-        && incoming().updatedAt == request.time;
-
-      allow update: if isValidSlug(slug)
-        && isPrimaryAdmin()
-        && isValidClinicPublicProfile(incoming(), slug)
-        && incoming().updatedAt == request.time;
-
-      allow delete: if isValidSlug(slug) && isPrimaryAdmin();
+      allow get: if true;
+      allow list, create, update, delete: if isPrimaryAdmin();
     }
 
-    // -----------------------------------------------------------------------
     // 3. Multi-Tenant Clinics Master Collection & Isolated Subcollections
-    // -----------------------------------------------------------------------
     match /clinics/{clinicId} {
       allow list: if isPrimaryAdmin()
+        || (isSignedIn() && request.auth.uid in resource.data.authorizedUids);
+
+      allow get: if isPrimaryAdmin() || isClinicMember(clinicId);
+      allow create, delete: if isPrimaryAdmin();
+
+      // Super Admin can edit anything; active clinic members can update presence heartbeat fields without altering plan/billing/ACL
+      allow update: if isPrimaryAdmin()
         || (
-          isClientPasswordUser()
-          && request.auth.uid in resource.data.authorizedUids
+          isClinicMember(clinicId)
+          && request.resource.data.ownerEmail == resource.data.ownerEmail
+          && request.resource.data.accessEmails == resource.data.accessEmails
+          && request.resource.data.authorizedUids == resource.data.authorizedUids
+          && request.resource.data.planTier == resource.data.planTier
+          && request.resource.data.subscriptionStatus == resource.data.subscriptionStatus
+          && request.resource.data.patientLimit == resource.data.patientLimit
+          && request.resource.data.storageLimitMb == resource.data.storageLimitMb
+          && request.resource.data.monthlyFeeAmount == resource.data.monthlyFeeAmount
+          && request.resource.data.billingCycle == resource.data.billingCycle
         );
 
-      allow get: if isValidId(clinicId)
-        && (isPrimaryAdmin() || isClinicMember(clinicId));
-
-      allow create: if isValidId(clinicId)
-        && isPrimaryAdmin()
-        && isValidClinicTenant(incoming())
-        && incoming().createdBy == request.auth.uid
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-
-      allow update: if isValidId(clinicId)
-        && isValidClinicTenant(incoming())
-        && incoming().createdBy == existing().createdBy
-        && incoming().createdAt == existing().createdAt
-        && (
-          (
-            isPrimaryAdmin()
-            && incoming().updatedAt == request.time
-            && (!('lastActiveAt' in existing()) ? !('lastActiveAt' in incoming()) : ('lastActiveAt' in incoming() && incoming().lastActiveAt == existing().lastActiveAt))
-            && (!('lastActiveEmail' in existing()) ? !('lastActiveEmail' in incoming()) : ('lastActiveEmail' in incoming() && incoming().lastActiveEmail == existing().lastActiveEmail))
-            && incoming().diff(existing()).affectedKeys().hasOnly([
-              'slug', 'clinicName', 'practitionerName', 'ownerEmail',
-              'accessEmails', 'authorizedUids',
-              'tagline', 'phone', 'address', 'currencySymbol', 'accentColor',
-              'planTier', 'subscriptionStatus', 'patientLimit', 'storageLimitMb',
-              'hostingProvider', 'monthlyFeeAmount', 'billingCycle', 'subscriptionNotes',
-              'updatedAt'
-            ])
-          )
-          || (
-            isClinicMember(clinicId)
-            && incoming().updatedAt == existing().updatedAt
-            && 'lastActiveAt' in incoming()
-            && incoming().lastActiveAt == request.time
-            && 'lastActiveEmail' in incoming()
-            && incoming().lastActiveEmail == userEmailLower()
-            && incoming().slug == existing().slug
-            && incoming().clinicName == existing().clinicName
-            && incoming().practitionerName == existing().practitionerName
-            && incoming().ownerEmail == existing().ownerEmail
-            && incoming().accessEmails == existing().accessEmails
-            && incoming().authorizedUids == existing().authorizedUids
-            && incoming().currencySymbol == existing().currencySymbol
-            && incoming().accentColor == existing().accentColor
-            && incoming().planTier == existing().planTier
-            && incoming().subscriptionStatus == existing().subscriptionStatus
-            && incoming().patientLimit == existing().patientLimit
-            && incoming().storageLimitMb == existing().storageLimitMb
-            && incoming().monthlyFeeAmount == existing().monthlyFeeAmount
-            && incoming().billingCycle == existing().billingCycle
-            && isFieldUnchanged(incoming(), existing(), 'tagline')
-            && isFieldUnchanged(incoming(), existing(), 'phone')
-            && isFieldUnchanged(incoming(), existing(), 'address')
-            && isFieldUnchanged(incoming(), existing(), 'hostingProvider')
-            && isFieldUnchanged(incoming(), existing(), 'subscriptionNotes')
-          )
-        );
-
-      allow delete: if isValidId(clinicId) && isPrimaryAdmin();
-
-      // Tenant Patients Subcollection (Clients have full CRUD within their active clinic)
       match /patients/{patientId} {
         allow list: if isPrimaryAdmin()
-          || (
-            isClientPasswordUser()
-            && request.auth.uid in resource.data.clinicAccessUids
-          );
+          || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+        allow get, create, update, delete: if isClinicWritable(clinicId);
 
-        allow get: if isValidId(clinicId) && isValidId(patientId)
-          && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-        allow create: if isValidId(clinicId)
-          && isValidId(patientId)
-          && isClinicWritable(clinicId)
-          && isValidPatientBase(incoming(), true)
-          && isNotCreatingDeleted(incoming())
-          && incoming().clinicId == clinicId
-          && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-          && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-
-        allow update: if isValidId(clinicId)
-          && isValidId(patientId)
-          && isClinicWritable(clinicId)
-          && isValidPatientBase(incoming(), true)
-          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && (
-            isPrimaryAdmin()
-            || (
-              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-              && isClientSoftDeleteStateValid(incoming(), existing())
-            )
-          );
-
-        allow delete: if isValidId(clinicId) && isValidId(patientId) && isClinicWritable(clinicId);
-
-        // Tenant Consultations Subcollection
         match /consultations/{consultationId} {
           allow list: if isPrimaryAdmin()
-            || (
-              isClientPasswordUser()
-              && request.auth.uid in resource.data.clinicAccessUids
-            );
-
-          allow get: if isValidId(clinicId) && isValidId(patientId) && isValidId(consultationId)
-            && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-          allow create: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(consultationId)
-            && isClinicWritable(clinicId)
-            && isValidConsultationBase(incoming(), patientId, true)
-            && isNotCreatingDeleted(incoming())
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == clinicId
-            && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-            && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-            && incoming().createdBy == request.auth.uid
-            && incoming().createdAt == request.time
-            && incoming().updatedAt == request.time;
-
-          allow update: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(consultationId)
-            && isClinicWritable(clinicId)
-            && isValidConsultationBase(incoming(), patientId, true)
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-            && incoming().createdBy == existing().createdBy
-            && incoming().createdAt == existing().createdAt
-            && incoming().updatedAt == request.time
-            && (
-              isPrimaryAdmin()
-              || (
-                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-                && isClientSoftDeleteStateValid(incoming(), existing())
-              )
-            );
-
-          allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(consultationId)
-            && isClinicWritable(clinicId);
+            || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+          allow get, create, update, delete: if isClinicWritable(clinicId);
         }
 
-        // Tenant Clinical Photos Subcollection
         match /photos/{photoId} {
           allow list: if isPrimaryAdmin()
-            || (
-              isClientPasswordUser()
-              && request.auth.uid in resource.data.clinicAccessUids
-            );
-
-          allow get: if isValidId(clinicId) && isValidId(patientId) && isValidId(photoId)
-            && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-          allow create: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(photoId)
-            && isClinicWritable(clinicId)
-            && isValidPatientPhotoBase(incoming(), patientId, true)
-            && isNotCreatingDeleted(incoming())
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == clinicId
-            && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-            && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-            && incoming().uploadedBy == request.auth.uid
-            && incoming().createdAt == request.time;
-
-          allow update: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(photoId)
-            && isClinicWritable(clinicId)
-            && isValidPatientPhotoBase(incoming(), patientId, true)
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-            && incoming().uploadedBy == existing().uploadedBy
-            && incoming().createdAt == existing().createdAt
-            && (
-              isPrimaryAdmin()
-              || (
-                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-                && isClientSoftDeleteStateValid(incoming(), existing())
-                && isFieldUnchanged(incoming(), existing(), 'fileName')
-                && isFieldUnchanged(incoming(), existing(), 'url')
-                && isFieldUnchanged(incoming(), existing(), 'mimeType')
-                && isFieldUnchanged(incoming(), existing(), 'sizeBytes')
-              )
-            );
-
-          allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(photoId)
-            && isClinicWritable(clinicId);
+            || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+          allow get, create, update, delete: if isClinicWritable(clinicId);
         }
 
-        // Tenant Clinical Notes Subcollection
         match /clinical_notes/{noteId} {
           allow list: if isPrimaryAdmin()
-            || (
-              isClientPasswordUser()
-              && request.auth.uid in resource.data.clinicAccessUids
-            );
-
-          allow get: if isValidId(clinicId) && isValidId(patientId) && isValidId(noteId)
-            && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-          allow create: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(noteId)
-            && isClinicWritable(clinicId)
-            && isValidClinicalNoteBase(incoming(), patientId, true)
-            && isNotCreatingDeleted(incoming())
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && incoming().clinicId == clinicId
-            && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-            && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-            && incoming().createdBy == request.auth.uid
-            && incoming().createdAt == request.time
-            && incoming().updatedAt == request.time;
-
-          allow update: if isValidId(clinicId)
-            && isValidId(patientId)
-            && isValidId(noteId)
-            && isClinicWritable(clinicId)
-            && isValidClinicalNoteBase(incoming(), patientId, true)
-            && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(patientId))
-            && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-            && incoming().createdBy == existing().createdBy
-            && incoming().createdAt == existing().createdAt
-            && incoming().updatedAt == request.time
-            && (
-              isPrimaryAdmin()
-              || (
-                isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-                && isClientSoftDeleteStateValid(incoming(), existing())
-              )
-            );
-
-          allow delete: if isValidId(clinicId) && isValidId(patientId) && isValidId(noteId)
-            && isClinicWritable(clinicId);
+            || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+          allow get, create, update, delete: if isClinicWritable(clinicId);
         }
       }
 
-      // Tenant Cash-Only Fee Records
       match /fee_records/{feeId} {
         allow list: if isPrimaryAdmin()
-          || (
-            isClientPasswordUser()
-            && request.auth.uid in resource.data.clinicAccessUids
-          );
-
-        allow get: if isValidId(clinicId) && isValidId(feeId)
-          && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-        allow create: if isValidId(clinicId)
-          && isValidId(feeId)
-          && isClinicWritable(clinicId)
-          && isValidFeeRecordBase(incoming(), true)
-          && isNotCreatingDeleted(incoming())
-          && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(incoming().patientId))
-          && incoming().clinicId == clinicId
-          && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-          && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-
-        allow update: if isValidId(clinicId)
-          && isValidId(feeId)
-          && isClinicWritable(clinicId)
-          && isValidFeeRecordBase(incoming(), true)
-          && exists(/databases/$(database)/documents/clinics/$(clinicId)/patients/$(incoming().patientId))
-          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-          && incoming().patientId == existing().patientId
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && (
-            isPrimaryAdmin()
-            || (
-              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-              && isClientSoftDeleteStateValid(incoming(), existing())
-              && isFieldUnchanged(incoming(), existing(), 'consultationId')
-            )
-          );
-
-        allow delete: if isValidId(clinicId) && isValidId(feeId) && isClinicWritable(clinicId);
+          || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+        allow get, create, update, delete: if isClinicWritable(clinicId);
       }
 
-      // Tenant Repertory Clinical Reference Collection
       match /repertory_entries/{entryId} {
         allow list: if isPrimaryAdmin()
-          || (
-            isClientPasswordUser()
-            && request.auth.uid in resource.data.clinicAccessUids
-          );
-
-        allow get: if isValidId(clinicId) && isValidId(entryId)
-          && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-        allow create: if isValidId(clinicId)
-          && isValidId(entryId)
-          && isClinicWritable(clinicId)
-          && isValidRepertoryEntryBase(incoming(), true)
-          && isNotCreatingDeleted(incoming())
-          && incoming().clinicId == clinicId
-          && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-          && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-
-        allow update: if isValidId(clinicId)
-          && isValidId(entryId)
-          && isClinicWritable(clinicId)
-          && isValidRepertoryEntryBase(incoming(), true)
-          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && (
-            isPrimaryAdmin()
-            || (
-              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-              && isClientSoftDeleteStateValid(incoming(), existing())
-            )
-          );
-
-        allow delete: if isValidId(clinicId) && isValidId(entryId) && isClinicWritable(clinicId);
+          || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+        allow get, create, update, delete: if isClinicWritable(clinicId);
       }
 
-      // Tenant Disease -> Symptoms -> Remedies Database Collection
       match /disease_remedies/{entryId} {
         allow list: if isPrimaryAdmin()
-          || (
-            isClientPasswordUser()
-            && request.auth.uid in resource.data.clinicAccessUids
-          );
-
-        allow get: if isValidId(clinicId) && isValidId(entryId)
-          && (isPrimaryAdmin() || isClinicActiveMember(clinicId));
-
-        allow create: if isValidId(clinicId)
-          && isValidId(entryId)
-          && isClinicWritable(clinicId)
-          && isValidDiseaseRemedyEntryBase(incoming(), true)
-          && isNotCreatingDeleted(incoming())
-          && incoming().clinicId == clinicId
-          && incoming().clinicAccessEmails == clinicDoc(clinicId).data.accessEmails
-          && incoming().clinicAccessUids == clinicDoc(clinicId).data.authorizedUids
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-
-        allow update: if isValidId(clinicId)
-          && isValidId(entryId)
-          && isClinicWritable(clinicId)
-          && isValidDiseaseRemedyEntryBase(incoming(), true)
-          && isTenantClinicIdValidOnUpdate(clinicId, incoming(), existing())
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time
-          && (
-            isPrimaryAdmin()
-            || (
-              isTenantAclUnchangedOrSynced(clinicId, incoming(), existing())
-              && isClientSoftDeleteStateValid(incoming(), existing())
-            )
-          );
-
-        allow delete: if isValidId(clinicId) && isValidId(entryId) && isClinicWritable(clinicId);
+          || (isSignedIn() && request.auth.uid in resource.data.clinicAccessUids);
+        allow get, create, update, delete: if isClinicWritable(clinicId);
       }
     }
 
-    // -----------------------------------------------------------------------
-    // 4. Legacy Root Collections (Strictly Super Admin Only for Continuity & Migration)
-    // -----------------------------------------------------------------------
+    // 4. Legacy Root Collections (Strictly Super Admin Only)
     match /patients/{patientId} {
-      allow list: if isPrimaryAdmin();
-      allow get: if isValidId(patientId) && isPrimaryAdmin();
-
-      allow create: if isValidId(patientId)
-        && isPrimaryAdmin()
-        && isValidPatientBase(incoming(), false)
-        && incoming().createdBy == request.auth.uid
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-
-      allow update: if isValidId(patientId)
-        && isPrimaryAdmin()
-        && isValidPatientBase(incoming(), false)
-        && incoming().createdBy == existing().createdBy
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time;
-
-      allow delete: if isValidId(patientId) && isPrimaryAdmin();
+      allow read, write: if isPrimaryAdmin();
 
       match /consultations/{consultationId} {
-        allow list: if isPrimaryAdmin();
-        allow get: if isValidId(patientId) && isValidId(consultationId) && isPrimaryAdmin();
-        allow create: if isValidId(patientId) && isValidId(consultationId) && isPrimaryAdmin()
-          && isValidConsultationBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(patientId) && isValidId(consultationId) && isPrimaryAdmin()
-          && isValidConsultationBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time;
-        allow delete: if isValidId(patientId) && isValidId(consultationId) && isPrimaryAdmin();
+        allow read, write: if isPrimaryAdmin();
       }
-
       match /photos/{photoId} {
-        allow list: if isPrimaryAdmin();
-        allow get: if isValidId(patientId) && isValidId(photoId) && isPrimaryAdmin();
-        allow create: if isValidId(patientId) && isValidId(photoId) && isPrimaryAdmin()
-          && isValidPatientPhotoBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().uploadedBy == request.auth.uid
-          && incoming().createdAt == request.time;
-        allow update: if isValidId(patientId) && isValidId(photoId) && isPrimaryAdmin()
-          && isValidPatientPhotoBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().uploadedBy == existing().uploadedBy
-          && incoming().createdAt == existing().createdAt;
-        allow delete: if isValidId(patientId) && isValidId(photoId) && isPrimaryAdmin();
+        allow read, write: if isPrimaryAdmin();
       }
-
       match /clinical_notes/{noteId} {
-        allow list: if isPrimaryAdmin();
-        allow get: if isValidId(patientId) && isValidId(noteId) && isPrimaryAdmin();
-        allow create: if isValidId(patientId) && isValidId(noteId) && isPrimaryAdmin()
-          && isValidClinicalNoteBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().createdBy == request.auth.uid
-          && incoming().createdAt == request.time
-          && incoming().updatedAt == request.time;
-        allow update: if isValidId(patientId) && isValidId(noteId) && isPrimaryAdmin()
-          && isValidClinicalNoteBase(incoming(), patientId, false)
-          && exists(/databases/$(database)/documents/patients/$(patientId))
-          && incoming().createdBy == existing().createdBy
-          && incoming().createdAt == existing().createdAt
-          && incoming().updatedAt == request.time;
-        allow delete: if isValidId(patientId) && isValidId(noteId) && isPrimaryAdmin();
+        allow read, write: if isPrimaryAdmin();
       }
     }
 
     match /clinic_settings/{settingId} {
-      allow list: if isPrimaryAdmin();
-      allow get: if isValidId(settingId) && isPrimaryAdmin();
-      allow create, update: if isValidId(settingId) && isPrimaryAdmin()
-        && isValidClinicSettings(incoming())
-        && incoming().updatedBy == request.auth.uid
-        && incoming().updatedAt == request.time;
-      allow delete: if isValidId(settingId) && isPrimaryAdmin();
+      allow read, write: if isPrimaryAdmin();
     }
 
     match /admins/{adminId} {
-      allow list: if isPrimaryAdmin();
-      allow get: if isValidId(adminId) && isPrimaryAdmin();
-      allow create: if isValidId(adminId) && isPrimaryAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == request.time;
-      allow update: if isValidId(adminId) && isPrimaryAdmin() && isValidAdminUser(incoming()) && incoming().createdAt == existing().createdAt;
-      allow delete: if isValidId(adminId) && isPrimaryAdmin();
+      allow read, write: if isPrimaryAdmin();
     }
 
     match /repertory_entries/{entryId} {
-      allow list: if isPrimaryAdmin();
-      allow get: if isValidId(entryId) && isPrimaryAdmin();
-      allow create: if isValidId(entryId) && isPrimaryAdmin()
-        && isValidRepertoryEntryBase(incoming(), false)
-        && incoming().createdBy == request.auth.uid
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(entryId) && isPrimaryAdmin()
-        && isValidRepertoryEntryBase(incoming(), false)
-        && incoming().createdBy == existing().createdBy
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time;
-      allow delete: if isValidId(entryId) && isPrimaryAdmin();
+      allow read, write: if isPrimaryAdmin();
     }
 
     match /fee_records/{feeId} {
-      allow list: if isPrimaryAdmin();
-      allow get: if isValidId(feeId) && isPrimaryAdmin();
-      allow create: if isValidId(feeId) && isPrimaryAdmin()
-        && isValidFeeRecordBase(incoming(), false)
-        && exists(/databases/$(database)/documents/patients/$(incoming().patientId))
-        && incoming().createdBy == request.auth.uid
-        && incoming().createdAt == request.time
-        && incoming().updatedAt == request.time;
-      allow update: if isValidId(feeId) && isPrimaryAdmin()
-        && isValidFeeRecordBase(incoming(), false)
-        && exists(/databases/$(database)/documents/patients/$(incoming().patientId))
-        && incoming().patientId == existing().patientId
-        && incoming().createdBy == existing().createdBy
-        && incoming().createdAt == existing().createdAt
-        && incoming().updatedAt == request.time;
-      allow delete: if isValidId(feeId) && isPrimaryAdmin();
+      allow read, write: if isPrimaryAdmin();
     }
   }
 }
